@@ -247,20 +247,28 @@ class Match(matchcommon):
 
         if data:
             self.__getScores__(data, update = True)
+
+        if self.detailed:
+            self.__getDetails__()
     
         
     def __checkMatch__(self):
             
         # Status change (half-time etc.)
-        if not match.find("span", {"class": re.compile(r"\bstatus\b")}).find("abbr").text == self.status:
+        if not match.find("span", 
+                         {"class": 
+                         re.compile(r"\bstatus\b")}).find(
+                                                  "abbr").text == self.status:
             self.statuschange = True
         else:
             self.statuschange = False
         
         # New match (i.e. different opponent)    
         if not (
-                    match.find("span", {"class": "home-team"}).text == self.hometeam or
-                    match.find("span", {"class": "away-team"}).text == self.awayteam):
+                    match.find("span", 
+                              {"class": "home-team"}).text == self.hometeam or
+                    match.find("span", 
+                              {"class": "away-team"}).text == self.awayteam):
             self.newmatch = True
         else:
             self.newmatch = False
@@ -289,11 +297,13 @@ class Match(matchcommon):
         
         if self.matchid:
             # Prepare bautiful soup to scrape match page
-            bs =  BeautifulSoup(self.getPage(self.detailprefix.format(id=self.matchid)))
+            bs =  BeautifulSoup(self.getPage(self.detailprefix.format(
+                                             id=self.matchid)))
 
                 # Let's get the home and away team detail sections
             try:
-                incidents = bs.find("table", {"class": "incidents-table"}).findAll("tr")
+                incidents = bs.find("table", 
+                                   {"class": "incidents-table"}).findAll("tr")
             except:
                 incidents = None
 
@@ -310,11 +320,21 @@ class Match(matchcommon):
             
             if incidents:
                 for incident in incidents:
-                    i = incident.find("td", {"class": re.compile(r"\bincident-type \b")})
+                    i = incident.find("td", 
+                                     {"class": 
+                                     re.compile(r"\bincident-type \b")})
                     if i:
-                        h = incident.find("td", {"class": "incident-player-home"}).text.strip()
-                        a = incident.find("td", {"class": "incident-player-away"}).text.strip()
-                        t = incident.find("td", {"class": "incident-time"}).text.strip()
+                        h = incident.find("td", 
+                                         {"class": 
+                                         "incident-player-home"}).text.strip()
+                        
+                        a = incident.find("td", 
+                                         {"class": 
+                                         "incident-player-away"}).text.strip()
+                        
+                        t = incident.find("td", 
+                                         {"class": 
+                                         "incident-time"}).text.strip()
 
                         if "goal" in i.get("class"):     
                             if h:
@@ -526,8 +546,8 @@ class Match(matchcommon):
     def PrintDetail(self):
         """Returns detailed summary of match (if available).
         
-        e.g. "(L) Arsenal 1-1 Chelsea (Arsenal: Wilshere 10', Chelsea: Lampard 48')"
-        
+        e.g. "(L) Arsenal 1-1 Chelsea (Arsenal: Wilshere 10', 
+              Chelsea: Lampard 48')"
         """
         if self.detailed:
             hscore = False
@@ -562,8 +582,14 @@ class Match(matchcommon):
 
 
 class League(matchcommon):
+    '''Get summary of matches for a given league.
+
+    NOTE: this may need to be updated as currently uses the accordion
+    source data whereas main Match module uses more complete source.
+    '''
     
-    accordionlink = "http://polling.bbc.co.uk/sport/shared/football/accordion/partial/collated"
+    accordionlink = ("http://polling.bbc.co.uk/sport/shared/football/"
+                     "accordion/partial/collated")
 
     def getLeagues(self):
         leagues = []
@@ -611,6 +637,8 @@ class League(matchcommon):
         
         
 class LeagueTable(matchcommon):
+    '''class to convert BBC league table format into python list/dict.'''
+
     leaguebase = "http://www.bbc.co.uk/sport/football/tables"
     leaguemethod = "filter"
     
@@ -619,6 +647,8 @@ class LeagueTable(matchcommon):
         pass
         
     def getLeagues(self):
+        '''method for getting list of available leagues'''
+
         leaguelist = []
         raw = BeautifulSoup(self.getPage(self.leaguebase))
         form = raw.find("div", {"class": "drop-down-filter",
@@ -634,7 +664,8 @@ class LeagueTable(matchcommon):
         return leaguelist
         
     def getLeagueTable(self, leagueid):
-        
+        '''method for creating league table of selected league.'''
+
         leaguetable = []
         
         leaguepage = "%s?%s=%s" % (self.leaguebase,
@@ -678,8 +709,3 @@ class LeagueTable(matchcommon):
             leaguetable.append(t)
             
         return leaguetable
-            
-
-a = Match("Liverpool", detailed=True)
-print a
-
