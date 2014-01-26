@@ -7,7 +7,7 @@ myleague = [league for league in leagues
 
 print myleague["name"]
 
-for pos, team in enumerate(l.getLeagueTable(myleague["id"])):
-	print "{0:02} - {1:20} - {2:02}".format(pos + 1, 
+for team in l.getLeagueTable(myleague["id"]):
+	print "{0:02} - {1:20} - {2:02}".format(int(team["position"]), 
 		                                    team["team"], 
 		                                    team["points"])
