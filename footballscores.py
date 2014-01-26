@@ -17,13 +17,13 @@ import urllib2
 import string
 from BeautifulSoup import BeautifulSoup
 import re
-from datetime import datetime
+from datetime import datetime, time
 
 
 class matchcommon(object):
     '''class for common functions for match classes.'''
 
-    def getPage(self, url):
+    def getPage(self, url, sendresponse = False):
         page = None
         try:
             user_agent = ('Mozilla/5.0 (Windows; U; Windows NT 6.1; '
@@ -34,10 +34,28 @@ class matchcommon(object):
             page = response.read()
         except:
             pass
-            
-        return page
+        
+        if sendresponse:
+            return response    
+        else:
+            return page
 
-class Match(matchcommon):
+    def __getServerTime__(self):
+
+        headers = self.getPage("http://www.bbc.co.uk",True)
+        datematch = re.compile(r'Date: (.*)')
+        rawtime = datematch.search(str(headers.headers))
+        if rawtime:
+            servertime = datetime.strptime(rawtime.groups()[0].strip()[:-4],
+                                           "%a, %d %b %Y %H:%M:%S")
+            return servertime
+
+        else:
+
+            return None
+
+
+class FootballMatch(matchcommon):
     '''Class for getting details of individual football matches.
     Data is pulled from BBC live scores page.
     '''
@@ -155,7 +173,9 @@ class Match(matchcommon):
         
                 if match.get("class") == "fixture":
                     status = "Fixture"
-                    matchtime = None
+                    matchtime = match.find("span", 
+                                     {"class": 
+                                     "elapsed-time"}).text.strip()[:5]
 
                 elif match.get("class") == "report":
                     status = "FT"
@@ -579,6 +599,31 @@ class Match(matchcommon):
                                             )
         else:
             return self.__str__()
+
+    @property
+    def TimeToKickOff(self):
+        '''Returns a timedelta object for the time until the match kicks off.
+
+        Returns None if unable to parse match time or if match in progress.
+        '''
+        if self.status == "Fixture":
+            try:
+                koh = int(self.matchtime[:2])
+                kom = int(self.matchtime[3:5])
+                kickoff = datetime.combine(
+                            datetime.now().date(),
+                            time(koh, kom, 0))
+                timetokickoff = kickoff - self.__getServerTime__()
+            except Exception, e:
+                timetokickoff = None
+            finally:
+                pass
+        else:
+            timetokickoff = None
+
+        return timetokickoff
+
+    
 
 
 class League(matchcommon):
