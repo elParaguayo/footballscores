@@ -1,7 +1,7 @@
-from footballscores import Match
+from footballscores import FootballMatch
 from time import sleep
 
-match = Match("Everton", detailed=True)
+match = FootballMatch("Chelsea", detailed=True)
 
 print match.PrintDetail
 
