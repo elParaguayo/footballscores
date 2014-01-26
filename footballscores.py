@@ -518,7 +518,35 @@ class FootballMatch(matchcommon):
         
         """
         return self.awayscorers
+    
+    @property    
+    def HomeYellowCards(self):
+        """Returns list of players receiving yellow cards for home team
         
+        """
+        return self.homeyellowcards
+    
+    @property    
+    def AwayYellowCards(self):
+        """Returns list of players receiving yellow cards for away team
+        
+        """
+        return self.awayyellowcards      
+    
+    @property    
+    def HomeRedCards(self):
+        """Returns list of players sent off for home team
+        
+        """
+        return self.homeredcards
+
+    @property    
+    def AwayRedCards(self):
+        """Returns list of players sent off for away team
+        
+        """
+        return self.awayredcards
+
     @property
     def MatchDate(self):
         """Returns date of match i.e. today's date
@@ -605,6 +633,9 @@ class FootballMatch(matchcommon):
         '''Returns a timedelta object for the time until the match kicks off.
 
         Returns None if unable to parse match time or if match in progress.
+
+        Should be unaffected by timezones as it gets current time from bbc
+        server which *should* be the same timezone as matches shown.
         '''
         if self.status == "Fixture":
             try:
