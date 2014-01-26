@@ -3,7 +3,7 @@ footballscores
 
 I'll add a bit more detail here when I have time, but in the meantime, here's some sample output from the module.
 
->>> from footballscores import FootballMatch
+<code>>>> from footballscores import FootballMatch
 >>> a=FootballMatch("Osasuna", detailed=True)
 >>> print a
 Osasuna 1-5 Athletic Bilbao (FT)
@@ -22,4 +22,4 @@ Osasuna 1-5 Athletic Bilbao (FT)
 >>> a.AwayRedCards
 []
 >>> a.MatchTime
-'FT'
+'FT'</code>
