@@ -40,7 +40,7 @@ class matchcommon(object):
         else:
             return page
 
-    def __getServerTime__(self):
+    def __getServerTime(self):
 
         headers = self.getPage("http://www.bbc.co.uk",True)
         datematch = re.compile(r'Date: (.*)')
@@ -89,19 +89,19 @@ class FootballMatch(matchcommon):
         self.myteam = team
         
         # Let's try and load some data
-        data = self.__loadData__(data)
+        data = self.__loadData(data)
         
         # If our team is found or we have data
         if data:
 
             # Update the class properties
-            self.__update__(data)
+            self.__update(data)
             # No notifications for now
             self.goal = False
             self.statuschange = False
             self.newmatch = False
 
-    def __resetMatch__(self):
+    def __resetMatch(self):
         '''Clear all variables'''
         self.hometeam = None
         self.awayteam = None
@@ -122,7 +122,7 @@ class FootballMatch(matchcommon):
         self.newmatch = False
 
 
-    def __findMatch__(self):
+    def __findMatch(self):
         # Start with the default page so we can get list of active leagues
         raw =  BeautifulSoup(self.getPage(self.livescoreslink.format(comp="")))
         
@@ -160,7 +160,7 @@ class FootballMatch(matchcommon):
                     
         return data
 
-    def __getScores__(self, data, update = False):
+    def __getScores(self, data, update = False):
 
         for match in data.findAll("tr", {"id": re.compile(r'^match-row')}):
             if match.find(text=self.myteam):
@@ -228,14 +228,14 @@ class FootballMatch(matchcommon):
                 self.awayscore = awayscore
 
         
-    def __update__(self, data = None):
+    def __update(self, data = None):
  
-        self.__getScores__(data)
+        self.__getScores(data)
         
         if self.detailed:
-            self.__getDetails__()
+            self.__getDetails()
 
-    def __loadData__(self, data = None):
+    def __loadData(self, data = None):
 
         self.matchfound = False
 
@@ -254,25 +254,25 @@ class FootballMatch(matchcommon):
                 data = None
 
         if not data:
-            data = self.__findMatch__()
+            data = self.__findMatch()
 
         if not data:
-            self.__resetMatch__()
+            self.__resetMatch()
        
         return data
     
     def Update(self, data = None):
 
-        data = self.__loadData__(data)
+        data = self.__loadData(data)
 
         if data:
-            self.__getScores__(data, update = True)
+            self.__getScores(data, update = True)
 
         if self.detailed:
-            self.__getDetails__()
+            self.__getDetails()
     
         
-    def __checkMatch__(self):
+    def __checkMatch(self):
             
         # Status change (half-time etc.)
         if not match.find("span", 
@@ -311,9 +311,9 @@ class FootballMatch(matchcommon):
         else:
             self.goal = False
         
-        self.__update__()
+        self.__update()
 
-    def __getDetails__(self):
+    def __getDetails(self):
         
         if self.matchid:
             # Prepare bautiful soup to scrape match page
@@ -339,6 +339,11 @@ class FootballMatch(matchcommon):
             arc = []
             
             if incidents:
+
+                self.__goalscorers = []
+                self.__yellowcards = []
+                self.__redcards = []
+
                 for incident in incidents:
                     i = incident.find("td", 
                                      {"class": 
@@ -358,21 +363,33 @@ class FootballMatch(matchcommon):
 
                         if "goal" in i.get("class"):     
                             if h:
-                                hsc = self.__addIncident__(hsc, h, t) 
+                                hsc = self.__addIncident(hsc, h, t)
+                                self.__goalscorers.append((self.hometeam,
+                                                           h, t)) 
                             else:
-                                asc = self.__addIncident__(asc, a, t)
+                                asc = self.__addIncident(asc, a, t)
+                                self.__goalscorers.append((self.awayteam,
+                                                           a, t))
                         
                         elif "yellow-card" in i.get("class"):
                             if h:
-                                hyc = self.__addIncident__(hyc, h, t) 
+                                hyc = self.__addIncident(hyc, h, t)
+                                self.__yellowcards.append((self.hometeam,
+                                                           h, t)) 
                             else:
-                                ayc = self.__addIncident__(ayc, a, t)
+                                ayc = self.__addIncident(ayc, a, t)
+                                self.__yellowcards.append((self.awayteam,
+                                                           a, t))
 
                         elif "red-card" in i.get("class"):
                             if h:
-                                hrc = self.__addIncident__(hrc, h, t) 
+                                hrc = self.__addIncident(hrc, h, t)
+                                self.__redcards.append((self.hometeam,
+                                                           h, t)) 
                             else:
-                                arc = self.__addIncident__(arc, a, t)
+                                arc = self.__addIncident(arc, a, t)
+                                self.__redcards.append((self.hometeam,
+                                                           a, t))
                                     
             self.homescorers = hsc
             self.awayscorers = asc
@@ -381,7 +398,7 @@ class FootballMatch(matchcommon):
             self.homeredcards = hrc
             self.awayredcards = arc
 
-    def __addIncident__(self, incidentlist, player, incidenttime):
+    def __addIncident(self, incidentlist, player, incidenttime):
         '''method to add incident to list variable'''
         found = False
         for incident in incidentlist:
@@ -410,6 +427,10 @@ class FootballMatch(matchcommon):
 
         return ", ".join(temp)
     
+    def __nonzero__(self):
+
+        return self.matchfound
+
     
     # Neater functions to return data:
     
@@ -548,6 +569,36 @@ class FootballMatch(matchcommon):
         return self.awayredcards
 
     @property
+    def LastGoalScorer(self):
+        if self.detailed:
+            if self.__goalscorers:
+                return self.__goalscorers[-1]
+            else:
+                return None
+        else:
+            return None
+
+    @property
+    def LastYellowCard(self):
+        if self.detailed:
+            if self.__yellowcards:
+                return self.__yellowcards[-1]
+            else:
+                return None
+        else:
+            return None
+
+    @property
+    def LastRedCard(self):
+        if self.detailed:
+            if self.__redcards:
+                return self.__redcards[-1]
+            else:
+                return None
+        else:
+            return None
+
+    @property
     def MatchDate(self):
         """Returns date of match i.e. today's date
         
@@ -644,7 +695,7 @@ class FootballMatch(matchcommon):
                 kickoff = datetime.combine(
                             datetime.now().date(),
                             time(koh, kom, 0))
-                timetokickoff = kickoff - self.__getServerTime__()
+                timetokickoff = kickoff - self.__getServerTime()
             except Exception, e:
                 timetokickoff = None
             finally:
