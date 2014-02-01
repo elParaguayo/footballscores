@@ -388,7 +388,7 @@ class FootballMatch(matchcommon):
                                                            h, t)) 
                             else:
                                 arc = self.__addIncident(arc, a, t)
-                                self.__redcards.append((self.hometeam,
+                                self.__redcards.append((self.awayteam,
                                                            a, t))
                                     
             self.homescorers = hsc
