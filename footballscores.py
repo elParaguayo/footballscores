@@ -23,6 +23,9 @@ from datetime import datetime, time
 class matchcommon(object):
     '''class for common functions for match classes.'''
 
+    livescoreslink = ("http://www.bbc.co.uk/sport/shared/football/"
+                      "live-scores/matches/{comp}/today")
+
     def getPage(self, url, sendresponse = False):
         page = None
         try:
@@ -40,20 +43,6 @@ class matchcommon(object):
         else:
             return page
 
-    def __getServerTime(self):
-
-        headers = self.getPage("http://www.bbc.co.uk",True)
-        datematch = re.compile(r'Date: (.*)')
-        rawtime = datematch.search(str(headers.headers))
-        if rawtime:
-            servertime = datetime.strptime(rawtime.groups()[0].strip()[:-4],
-                                           "%a, %d %b %Y %H:%M:%S")
-            return servertime
-
-        else:
-
-            return None
-
 
 class FootballMatch(matchcommon):
     '''Class for getting details of individual football matches.
@@ -61,8 +50,6 @@ class FootballMatch(matchcommon):
     '''
     # self.accordionlink = "http://polling.bbc.co.uk/sport/shared/football/accordion/partial/collated"
 
-    livescoreslink = ("http://www.bbc.co.uk/sport/shared/football/"
-                      "live-scores/matches/{comp}/today")
     detailprefix =   ("http://www.bbc.co.uk/sport/football/live/"
                       "partial/{id}")
 
@@ -100,6 +87,20 @@ class FootballMatch(matchcommon):
             self.goal = False
             self.statuschange = False
             self.newmatch = False
+
+    def __getServerTime(self):
+
+        headers = self.getPage("http://www.bbc.co.uk",True)
+        datematch = re.compile(r'Date: (.*)')
+        rawtime = datematch.search(str(headers.headers))
+        if rawtime:
+            servertime = datetime.strptime(rawtime.groups()[0].strip()[:-4],
+                                           "%a, %d %b %Y %H:%M:%S")
+            return servertime
+
+        else:
+
+            return None
 
     def __resetMatch(self):
         '''Clear all variables'''
@@ -836,3 +837,43 @@ class LeagueTable(matchcommon):
             leaguetable.append(t)
             
         return leaguetable
+
+class Teams(matchcommon):
+
+    def getTeams(self):
+        # Start with the default page so we can get list of active leagues
+        raw =  BeautifulSoup(self.getPage(self.livescoreslink.format(comp="")))
+        
+        # Find the list of active leagues
+        selection = raw.find("div", {"class": 
+                                     "drop-down-filter live-scores-fixtures"})
+        
+        teamlist = []
+      
+        # Loop throught the active leagues
+        for option in selection.findAll("option"):
+            
+            # Build the link for that competition
+            league = option.get("value")[12:]
+            
+            if league:
+                scorelink = self.livescoreslink.format(comp=league)
+            
+                # Prepare to process page
+                optionhtml = BeautifulSoup(self.getPage(scorelink))
+                
+                # We just want the live games...
+                live = optionhtml.find("div", {"id": "matches-wrapper"})
+
+                for match in live.findAll("tr", {"id": re.compile(r'^match-row')}):
+
+                    teamlist.append(match.find("span", 
+                                              {"class": "team-home"}).text)
+                    
+                    teamlist.append(match.find("span", 
+                                              {"class": "team-away"}).text)
+                
+
+        teamlist = sorted(teamlist)
+                    
+        return teamlist
