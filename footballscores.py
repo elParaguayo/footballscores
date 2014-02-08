@@ -43,7 +43,6 @@ class matchcommon(object):
         else:
             return page
 
-
 class FootballMatch(matchcommon):
     '''Class for getting details of individual football matches.
     Data is pulled from BBC live scores page.
@@ -432,6 +431,11 @@ class FootballMatch(matchcommon):
 
         return self.matchfound
 
+    def __repr__(self):
+
+        return "FootballMatch(\'%s\', detailed=%s)" % (self.myteam,
+                                                          self.detailed)
+
     
     # Neater functions to return data:
     
@@ -479,7 +483,10 @@ class FootballMatch(matchcommon):
         e.g. "L", "HT", "FT"
         
         """
-        return self.status
+        if self.status == "Fixture":
+            return self.matchtime
+        else:
+            return self.status
     
     @property        
     def Goal(self):
@@ -637,7 +644,7 @@ class FootballMatch(matchcommon):
                                           self.homescore,
                                           self.awayscore,
                                           self.awayteam,
-                                          self.status
+                                          self.Status
                                           )
         else:
 
@@ -706,9 +713,6 @@ class FootballMatch(matchcommon):
 
         return timetokickoff
 
-    
-
-
 class League(matchcommon):
     '''Get summary of matches for a given league.
 
@@ -719,51 +723,113 @@ class League(matchcommon):
     accordionlink = ("http://polling.bbc.co.uk/sport/shared/football/"
                      "accordion/partial/collated")
 
-    def getLeagues(self):
+    def __init__(self, league, detailed=False):
+
+        self.__leaguematches = self.__getMatches(league,detailed=detailed)
+        self.__leagueid = league
+        self.__leaguename = self.__getLeagueName(league)
+        self.__detailed = detailed
+
+    def __getData(self, league):
+
+        scorelink = self.livescoreslink.format(comp=league)
+    
+        # Prepare to process page
+        optionhtml = BeautifulSoup(self.getPage(scorelink))
+        
+        # We just want the live games...
+        data = optionhtml.find("div", {"id": "matches-wrapper"})
+
+        return data
+
+    def __getLeagueName(self, league):
+
+        raw =  BeautifulSoup(self.getPage(self.livescoreslink.format(comp=league)))
+        
+        # Find the list of active leagues
+        selection = raw.find("div", {"class": 
+                                     "drop-down-filter live-scores-fixtures"})
+      
+        selectedleague = selection.find("option", {"selected": "selected"})
+        leaguename = selectedleague.text.split("(")[0].strip()
+        
+        return leaguename
+
+
+    @staticmethod
+    def getLeagues():
         leagues = []
-        raw =  BeautifulSoup(self.getPage(self.accordionlink))
-        # Loop through all the competitions being played today
-        for option in raw.findAll("option"):
-            league = {}
-            league["name"] = option.text
-            league["id"] = option.get("value")
-            leagues.append(league)
+        # raw =  BeautifulSoup(self.getPage(self.accordionlink))
+        # # Loop through all the competitions being played today
+        # for option in raw.findAll("option"):
+        #     league = {}
+        #     league["name"] = option.text
+        #     league["id"] = option.get("value")
+        #     leagues.append(league)
             
+        # return leagues
+        livescoreslink = matchcommon().livescoreslink
+
+        # Start with the default page so we can get list of active leagues
+        raw =  BeautifulSoup(matchcommon().getPage(livescoreslink.format(comp="")))
+        
+        # Find the list of active leagues
+        selection = raw.find("div", {"class": 
+                                     "drop-down-filter live-scores-fixtures"})
+      
+        # Loop throught the active leagues
+        for option in selection.findAll("option"):
+            
+            # Build the link for that competition
+            # league = option.get("value")[12:]
+            league = {}
+            league["name"] = option.text.split("(")[0].strip()
+            league["id"] = option.get("value")[12:]
+            if league["id"]:
+                leagues.append(league)
+
         return leagues
         
-    def getScores(self, league):
-        scores = {}
-        scores["league"] = league
-        scoreslist = []
-        accordionlink = "%s?selectedCompetitionId=%s" % (self.accordionlink,
-                                                        league)
-        raw = BeautifulSoup(self.getPage(accordionlink))
-        
-        matches = raw.find("div", {"class": "accordion-container live-today"})
-        
-        if not matches is None:
-            for match in matches.findAll("li"):
-                matchdetail = {}
-                matchdetail["hometeam"] = match.find("span", {"class": "home-team"}).text
-                matchdetail["awayteam"] = match.find("span", {"class": "away-team"}).text
-                
-                matchdetail["status"] = match.find("span", {"class": re.compile(r"\bstatus\b")}).find("abbr").text
-                
-                score = match.find("span", {"class": "result"}).text.split(" ")
-                try:
-                    matchdetail["homescore"] = int(score[0].strip())
-                    matchdetail["awayscore"] = int(score[2].strip())
-                except:
-                    matchdetail["homescore"] = 0
-                    matchdetail["awayscore"] = 0
-                    
-                scoreslist.append(matchdetail)
-            
-        scores["matches"] = scoreslist
-        
-        return scores
-        
-        
+    def __getMatches(self, league, detailed=False):
+
+        data = self.__getData(league)
+
+        matches = []
+
+        rawmatches = data.findAll("tr", {"id": re.compile(r'^match-row')})
+
+        if rawmatches:
+
+            for match in rawmatches:
+                team = match.find("span", {"class": "team-home"}).text
+                m = FootballMatch(team, detailed=detailed, data=data)
+                matches.append(m)
+
+        return matches
+
+    def __repr__(self):
+        return "League(\'%s\', detailed=%s)" % (self.__leagueid,
+                                                self.__detailed)
+
+    def Update(self):
+
+        if self.__leaguematches:
+            data = self.__getData(self.__leagueid)
+            for match in self.__leaguematches:
+                match.Update(data=data)
+
+    @property 
+    def LeagueMatches(self):
+        return self.__leaguematches
+
+    @property
+    def LeagueName(self):
+        return self.__leaguename
+
+    @property 
+    def LeagueID(self):
+        return self.__leagueid
+
 class LeagueTable(matchcommon):
     '''class to convert BBC league table format into python list/dict.'''
 
@@ -773,7 +839,7 @@ class LeagueTable(matchcommon):
     def __init__(self):
         #self.availableLeague = self.getLeagues()
         pass
-        
+    
     def getLeagues(self):
         '''method for getting list of available leagues'''
 
