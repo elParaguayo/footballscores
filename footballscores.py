@@ -120,6 +120,8 @@ class FootballMatch(matchcommon):
         self.goal = False
         self.statuschange = False
         self.newmatch = False
+        self.homebadge = None
+        self.awaybadge = None
 
 
     def __findMatch(self):
@@ -170,6 +172,10 @@ class FootballMatch(matchcommon):
                 
                 self.awayteam = match.find("span", 
                                           {"class": "team-away"}).text
+
+                linkrow = match.find("td", {"class": "match-link"})
+                link = linkrow.find("a").get("href")
+                self.matchlink = "http://www.bbc.co.uk%s" % (link)
         
                 if match.get("class") == "fixture":
                     status = "Fixture"
@@ -272,46 +278,46 @@ class FootballMatch(matchcommon):
             self.__getDetails()
     
         
-    def __checkMatch(self):
+    # def __checkMatch(self):
             
-        # Status change (half-time etc.)
-        if not match.find("span", 
-                         {"class": 
-                         re.compile(r"\bstatus\b")}).find(
-                                                  "abbr").text == self.status:
-            self.statuschange = True
-        else:
-            self.statuschange = False
+    #     # Status change (half-time etc.)
+    #     if not match.find("span", 
+    #                      {"class": 
+    #                      re.compile(r"\bstatus\b")}).find(
+    #                                               "abbr").text == self.status:
+    #         self.statuschange = True
+    #     else:
+    #         self.statuschange = False
         
-        # New match (i.e. different opponent)    
-        if not (
-                    match.find("span", 
-                              {"class": "home-team"}).text == self.hometeam or
-                    match.find("span", 
-                              {"class": "away-team"}).text == self.awayteam):
-            self.newmatch = True
-        else:
-            self.newmatch = False
+    #     # New match (i.e. different opponent)    
+    #     if not (
+    #                 match.find("span", 
+    #                           {"class": "home-team"}).text == self.hometeam or
+    #                 match.find("span", 
+    #                           {"class": "away-team"}).text == self.awayteam):
+    #         self.newmatch = True
+    #     else:
+    #         self.newmatch = False
         
-        # Goooooooooooaaaaaaaaalllllllllllll!  
+    #     # Goooooooooooaaaaaaaaalllllllllllll!  
         
-        score = match.find("span", {"class": "result"}).text.split(" ")
-        try:
-            homescore = int(score[0].strip())
-            awayscore = int(score[2].strip())
-        except:
-            homescore = 0
-            awayscore = 0
+    #     score = match.find("span", {"class": "result"}).text.split(" ")
+    #     try:
+    #         homescore = int(score[0].strip())
+    #         awayscore = int(score[2].strip())
+    #     except:
+    #         homescore = 0
+    #         awayscore = 0
           
-        if not (
-                    homescore == self.homescore or
-                    awayscore == self.awayscore
-                ):
-            self.goal = True
-        else:
-            self.goal = False
+    #     if not (
+    #                 homescore == self.homescore or
+    #                 awayscore == self.awayscore
+    #             ):
+    #         self.goal = True
+    #     else:
+    #         self.goal = False
         
-        self.__update()
+    #     self.__update()
 
     def __getDetails(self):
         
@@ -426,6 +432,20 @@ class FootballMatch(matchcommon):
                                      ", ".join(incident[1])))
 
         return ", ".join(temp)
+
+    def getTeamBadges(self):
+        found = False
+        
+        if self.matchlink:
+            linkpage = BeautifulSoup(self.getPage(self.matchlink))
+            badges = linkpage.findAll("div", {"class": "team-badge"})
+            if badges:
+                self.homebadge = badges[0].find("img").get("src")
+                self.awaybadge = badges[1].find("img").get("src")
+                found = True
+
+        return found
+
     
     def __nonzero__(self):
 
@@ -521,18 +541,16 @@ class FootballMatch(matchcommon):
     @property
     def HomeBadge(self):
         """Returns link to image for home team's badge
-        NOT CURRENTLY IMPLEMENTED
         
         """
-        return None
+        return self.homebadge
     
     @property    
     def AwayBadge(self):
         """Returns link to image for away team's badge
-        NOT CURRENTLY IMPLEMENTED
 
         """
-        return None
+        return self.awaybadge
     
     @property    
     def HomeScorers(self):
@@ -811,6 +829,19 @@ class League(matchcommon):
         return "League(\'%s\', detailed=%s)" % (self.__leagueid,
                                                 self.__detailed)
 
+    def __str__(self):
+        if self.__leaguematches:
+            if len(self.__leaguematches) == 1:
+                matches = "(1 match)"
+            else:
+                matches = "(%d matches)" % (len(self.__leaguematches))
+            return "%s %s" % (self.__leaguename, matches)
+        else:
+            return None
+
+    def __nonzero__(self):
+        return bool(self.__leaguematches)
+
     def Update(self):
 
         if self.__leaguematches:
@@ -860,6 +891,49 @@ class LeagueTable(matchcommon):
     def getLeagueTable(self, leagueid):
         '''method for creating league table of selected league.'''
 
+        class LeagueTableTeam(object):
+
+            def __init__(self, team):
+
+                f = team.find
+                self.name = f("td", {"class": "team-name"}).text
+                self.position = int(f("span", 
+                                     {"class": "position-number"}).text)
+                self.played = int(f("td", {"class": "played"}).text)
+                self.won = int(f("td", {"class": "won"}).text)
+                self.drawn = int(f("td", {"class": "drawn"}).text)
+                self.lost = int(f("td", {"class": "lost"}).text)            
+                self.goalsfor = int(f("td", {"class": "for"}).text)
+                self.goalsagainst = int(f("td", {"class": "against"}).text) 
+                self.goaldifference = int(f("td", 
+                                           {"class": "goal-difference"}).text)
+                self.points = int(f("td", {"class": "points"}).text)  
+                
+                try:
+                    lastgames = f("td", {"class": "last-10-games"})
+                    lg = []
+                    for game in lastgames.findAll("li"):
+                        g = {}
+                        g["result"] = game.get("class")
+                        g["score"] = game.get("data-result")
+                        g["opponent"] = game.get("data-against")
+                        g["date"] = game.get("data-date")
+                        g["summary"] = game.get("title")
+                        lg.append(g)
+                    self.lasttengames = lg
+                
+                except:
+                    self.lasttengames = []
+
+                def __repr__(self):
+                    return "<LeagueTableTeam object - %s>" % self.name
+
+            def __str__(self):
+                return "%d %s %d" % (self.position,
+                                     self.name,
+                                     self.points)
+
+
         leaguetable = []
         
         leaguepage = "%s?%s=%s" % (self.leaguebase,
@@ -871,35 +945,7 @@ class LeagueTable(matchcommon):
         table = raw.find("div", {"class": "league-table full-table-wide"})
         
         for team in table.findAll("tr", {"id": re.compile(r'team')}):
-            t = {}
-            f = team.find
-            t["team"] = f("td", {"class": "team-name"}).text
-            t["position"] = int(f("span", {"class": "position-number"}).text)
-            t["played"] = int(f("td", {"class": "played"}).text)
-            t["won"] = int(f("td", {"class": "won"}).text)
-            t["drawn"] = int(f("td", {"class": "drawn"}).text)
-            t["lost"] = int(f("td", {"class": "lost"}).text)            
-            t["for"] = int(f("td", {"class": "for"}).text)
-            t["against"] = int(f("td", {"class": "against"}).text) 
-            t["goal-difference"] = int(f("td", {"class": "goal-difference"}).text)
-            t["points"] = int(f("td", {"class": "points"}).text)  
-            
-            try:
-                lastgames = f("td", {"class": "last-10-games"})
-                lg = []
-                for game in lastgames.findAll("li"):
-                    g = {}
-                    g["result"] = game.get("class")
-                    g["score"] = game.get("data-result")
-                    g["opponent"] = game.get("data-against")
-                    g["date"] = game.get("data-date")
-                    g["summary"] = game.get("title")
-                    lg.append(g)
-                t["last10games"] = lg
-            
-            except:
-                t["last10games"] = []
-                    
+            t = LeagueTableTeam(team)
             leaguetable.append(t)
             
         return leaguetable
