@@ -18,6 +18,8 @@ import string
 from BeautifulSoup import BeautifulSoup
 import re
 from datetime import datetime, time
+import json
+import codecs
 
 
 class matchcommon(object):
@@ -41,7 +43,8 @@ class matchcommon(object):
         if sendresponse:
             return response    
         else:
-            return page
+            # Fixed this line to handle accented team namess
+            return codecs.decode(page, "utf-8")
 
 class FootballMatch(matchcommon):
     '''Class for getting details of individual football matches.
@@ -73,6 +76,8 @@ class FootballMatch(matchcommon):
         
         # Which team am I following?
         self.myteam = team
+
+        self.__resetMatch()
         
         # Let's try and load some data
         data = self.__loadData(data)
@@ -87,14 +92,16 @@ class FootballMatch(matchcommon):
             self.statuschange = False
             self.newmatch = False
 
-    def __getServerTime(self):
+    def __getUKTime(self):
+        #api.geonames.org/timezoneJSON?formatted=true&lat=51.51&lng=0.13&username=demo&style=full
+        rawbbctime = self.getPage("http://api.geonames.org/timezoneJSON"
+                               "?formatted=true&lat=51.51&lng=0.13&"
+                               "username=elParaguayo&style=full")
+        bbctime = json.loads(rawbbctime).get("time")
 
-        headers = self.getPage("http://www.bbc.co.uk",True)
-        datematch = re.compile(r'Date: (.*)')
-        rawtime = datematch.search(str(headers.headers))
-        if rawtime:
-            servertime = datetime.strptime(rawtime.groups()[0].strip()[:-4],
-                                           "%a, %d %b %Y %H:%M:%S")
+        if bbctime:
+            servertime = datetime.strptime(bbctime,
+                                           "%Y-%m-%d %H:%M")
             return servertime
 
         else:
@@ -122,6 +129,8 @@ class FootballMatch(matchcommon):
         self.newmatch = False
         self.homebadge = None
         self.awaybadge = None
+        self.matchid = None
+        self.matchlink = None
 
 
     def __findMatch(self):
@@ -154,7 +163,7 @@ class FootballMatch(matchcommon):
                 if live.find(text=self.myteam):
                     teamfound = True
                     self.scorelink = scorelink
-                    self.competition = option.text
+                    self.competition = option.text.split("(")[0].strip()
                     data = live
                     break
         
@@ -167,15 +176,18 @@ class FootballMatch(matchcommon):
         for match in data.findAll("tr", {"id": re.compile(r'^match-row')}):
             if match.find(text=self.myteam):
 
-                self.hometeam = match.find("span", 
-                                          {"class": "team-home"}).text
+                print match
+
+                self.hometeam = match.find("span", {"class": "team-home"}).text ## ENCODE
                 
-                self.awayteam = match.find("span", 
-                                          {"class": "team-away"}).text
+                self.awayteam = match.find("span", {"class": "team-away"}).text
 
                 linkrow = match.find("td", {"class": "match-link"})
-                link = linkrow.find("a").get("href")
-                self.matchlink = "http://www.bbc.co.uk%s" % (link)
+                try:
+                    link = linkrow.find("a").get("href")
+                    self.matchlink = "http://www.bbc.co.uk%s" % (link)
+                except AttributeError:
+                    self.matchlink = None 
         
                 if match.get("class") == "fixture":
                     status = "Fixture"
@@ -225,11 +237,12 @@ class FootballMatch(matchcommon):
 
                     if not (homescore == self.homescore and
                             awayscore == self.awayscore):
+                        # Gooooooooooooaaaaaaaaaaaaaaaaallllllllllllllllll!
                         self.goal = True
 
-                self.status = status
-                self.matchtime = matchtime
-                self.matchid = matchid
+                self.status = status if status else None ## ENCODE
+                self.matchtime = matchtime if matchtime else None ## ENCODE
+                self.matchid = matchid if matchid else None ## ENCODE
                 self.homescore = homescore
                 self.awayscore = awayscore
 
@@ -276,48 +289,6 @@ class FootballMatch(matchcommon):
 
         if self.detailed:
             self.__getDetails()
-    
-        
-    # def __checkMatch(self):
-            
-    #     # Status change (half-time etc.)
-    #     if not match.find("span", 
-    #                      {"class": 
-    #                      re.compile(r"\bstatus\b")}).find(
-    #                                               "abbr").text == self.status:
-    #         self.statuschange = True
-    #     else:
-    #         self.statuschange = False
-        
-    #     # New match (i.e. different opponent)    
-    #     if not (
-    #                 match.find("span", 
-    #                           {"class": "home-team"}).text == self.hometeam or
-    #                 match.find("span", 
-    #                           {"class": "away-team"}).text == self.awayteam):
-    #         self.newmatch = True
-    #     else:
-    #         self.newmatch = False
-        
-    #     # Goooooooooooaaaaaaaaalllllllllllll!  
-        
-    #     score = match.find("span", {"class": "result"}).text.split(" ")
-    #     try:
-    #         homescore = int(score[0].strip())
-    #         awayscore = int(score[2].strip())
-    #     except:
-    #         homescore = 0
-    #         awayscore = 0
-          
-    #     if not (
-    #                 homescore == self.homescore or
-    #                 awayscore == self.awayscore
-    #             ):
-    #         self.goal = True
-    #     else:
-    #         self.goal = False
-        
-    #     self.__update()
 
     def __getDetails(self):
         
@@ -369,33 +340,27 @@ class FootballMatch(matchcommon):
 
                         if "goal" in i.get("class"):     
                             if h:
-                                hsc = self.__addIncident(hsc, h, t)
-                                self.__goalscorers.append((self.hometeam,
-                                                           h, t)) 
+                                hsc = self.__addIncident(hsc, h, t) ## ENCODE
+                                self.__goalscorers.append((self.hometeam, h, t))
                             else:
                                 asc = self.__addIncident(asc, a, t)
-                                self.__goalscorers.append((self.awayteam,
-                                                           a, t))
+                                self.__goalscorers.append((self.awayteam, a, t))
                         
                         elif "yellow-card" in i.get("class"):
                             if h:
                                 hyc = self.__addIncident(hyc, h, t)
-                                self.__yellowcards.append((self.hometeam,
-                                                           h, t)) 
+                                self.__yellowcards.append((self.hometeam, h, t))
                             else:
                                 ayc = self.__addIncident(ayc, a, t)
-                                self.__yellowcards.append((self.awayteam,
-                                                           a, t))
+                                self.__yellowcards.append((self.awayteam, a, t))
 
                         elif "red-card" in i.get("class"):
                             if h:
                                 hrc = self.__addIncident(hrc, h, t)
-                                self.__redcards.append((self.hometeam,
-                                                           h, t)) 
+                                self.__redcards.append((self.hometeam, h, t))
                             else:
                                 arc = self.__addIncident(arc, a, t)
-                                self.__redcards.append((self.awayteam,
-                                                           a, t))
+                                self.__redcards.append((self.awayteam, a, t))
                                     
             self.homescorers = hsc
             self.awayscorers = asc
@@ -418,7 +383,7 @@ class FootballMatch(matchcommon):
 
         return incidentlist
 
-    def formatIncidents(self, incidentlist):
+    def formatIncidents(self, incidentlist, newline = False):
         '''Incidents are in the following format:
         List:
           [Tuple:
@@ -427,11 +392,13 @@ class FootballMatch(matchcommon):
         This function converts the list into a string.
         '''
         temp = []
+        incidentjoin = "\n" if newline else ", "
+
         for incident in incidentlist:
             temp.append("%s (%s)" % (incident[0],
                                      ", ".join(incident[1])))
 
-        return ", ".join(temp)
+        return incidentjoin.join(temp)
 
     def getTeamBadges(self):
         found = False
@@ -455,7 +422,15 @@ class FootballMatch(matchcommon):
 
         return "FootballMatch(\'%s\', detailed=%s)" % (self.myteam,
                                                           self.detailed)
-
+    
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            if not self.matchid is None:
+                return self.matchid == other.matchid
+            else:
+                return self.myteam == other.myteam
+        else:
+            return False
     
     # Neater functions to return data:
     
@@ -494,7 +469,7 @@ class FootballMatch(matchcommon):
         e.g. "Premier League", "FA Cup" etc
         
         """
-        return self.competitionname
+        return self.competition
     
     @property        
     def Status(self):
@@ -647,7 +622,29 @@ class FootballMatch(matchcommon):
         if self.status=="L" and self.matchtime is not None:
             return self.matchtime
         else:
-            return self.status
+            return self.Status
+
+    def __unicode__(self):
+        """Returns short formatted summary of match.
+        
+        e.g. "Arsenal 1-1 Chelsea (L)"
+
+        Should handle accented characters.
+        
+        """
+        if self.matchfound:
+        
+            return u"%s %s-%s %s (%s)" % (
+                                          self.hometeam,
+                                          self.homescore,
+                                          self.awayscore,
+                                          self.awayteam,
+                                          self.Status
+                                          )
+
+        else:
+
+            return u"%s are not playing today." % (self.myteam)
         
     def __str__(self):
         """Returns short formatted summary of match.
@@ -655,18 +652,8 @@ class FootballMatch(matchcommon):
         e.g. "Arsenal 1-1 Chelsea (L)"
         
         """
-        if self.matchfound:
-        
-            return "%s %s-%s %s (%s)" % (
-                                          self.hometeam,
-                                          self.homescore,
-                                          self.awayscore,
-                                          self.awayteam,
-                                          self.Status
-                                          )
-        else:
+        return unicode(self).encode('utf-8')
 
-            return "%s are not playing today." % (self.myteam)
     @property
     def PrintDetail(self):
         """Returns detailed summary of match (if available).
@@ -674,7 +661,7 @@ class FootballMatch(matchcommon):
         e.g. "(L) Arsenal 1-1 Chelsea (Arsenal: Wilshere 10', 
               Chelsea: Lampard 48')"
         """
-        if self.detailed:
+        if self.MatchFound and self.detailed:
             hscore = False
             scorerstring = ""
             
@@ -721,7 +708,7 @@ class FootballMatch(matchcommon):
                 kickoff = datetime.combine(
                             datetime.now().date(),
                             time(koh, kom, 0))
-                timetokickoff = kickoff - self.__getServerTime()
+                timetokickoff = kickoff - self.__getUKTime()
             except Exception, e:
                 timetokickoff = None
             finally:
@@ -762,15 +749,21 @@ class League(matchcommon):
 
     def __getLeagueName(self, league):
 
+        leaguename = None
+
         raw =  BeautifulSoup(self.getPage(self.livescoreslink.format(comp=league)))
         
         # Find the list of active leagues
         selection = raw.find("div", {"class": 
                                      "drop-down-filter live-scores-fixtures"})
       
-        selectedleague = selection.find("option", {"selected": "selected"})
-        leaguename = selectedleague.text.split("(")[0].strip()
+        if selection:
+
+            selectedleague = selection.find("option", {"selected": "selected"})
         
+            if selectedleague:
+                leaguename = selectedleague.text.split("(")[0].strip()
+
         return leaguename
 
 
@@ -808,9 +801,10 @@ class League(matchcommon):
 
         return leagues
         
-    def __getMatches(self, league, detailed=False):
+    def __getMatches(self, league, detailed=False, data = None):
 
-        data = self.__getData(league)
+        if data is None:
+            data = self.__getData(league)
 
         matches = []
 
@@ -843,11 +837,60 @@ class League(matchcommon):
         return bool(self.__leaguematches)
 
     def Update(self):
+        '''Updates all matches in the league.
 
-        if self.__leaguematches:
-            data = self.__getData(self.__leagueid)
-            for match in self.__leaguematches:
-                match.Update(data=data)
+        If there are no games (e.g. a new day) then the old macthes are removed.
+
+        If there are new games, these are added.
+        '''
+
+        # Get the data for league
+        data = self.__getData(self.__leagueid)
+
+        # We've found some data so let's process
+        if data:
+            # Get a list of the current matches from the new data
+            currentmatches = self.__getMatches(self.__leagueid, data=data)
+
+            # If the match is already in our league, then we keep it
+            self.__leaguematches = [m for m in self.__leaguematches if m in currentmatches]
+
+            # Check if there are any matches in the new data which aren't in our list
+            newmatches = [m for m in currentmatches if m not in self.__leaguematches]
+
+            # If so...
+            if newmatches:
+                # If we want detailed info on each match
+                if self.__detailed:
+                    for m in newmatches:
+                        
+                        # then we need to update the flag for that match
+                        m.detailed = True
+
+                        # and add it to our list
+                        self.__leaguematches.append(m)
+                else:
+                    # If not, then we can just add the new matches to our list
+                    self.__leaguematches += newmatches
+
+            # If we've got matches in our list
+            if self.__leaguematches:
+                for match in self.__leaguematches:
+
+                    # Update the matches
+                    # NB we need to update each match to ensure the "Goal"
+                    # flag is updated appropriately, rather than just adding a new match
+                    # object.
+                    match.Update(data=data)
+
+        else:
+            # If there's no data, there are no matches...
+            self.__leaguematches = []
+
+        # If we haven't managed to set the league name yet
+        # then we should be able to find it if there are some matches
+        if self.__leaguematches and self.LeagueName is None:
+            self.LeagueName = self.__getLeagueName(self.__leagueid)
 
     @property 
     def LeagueMatches(self):
@@ -989,3 +1032,13 @@ class Teams(matchcommon):
         teamlist = sorted(teamlist)
                     
         return teamlist
+
+def getAllLeagues():
+
+    tableleagues = LeagueTable().getLeagues()
+    tableleagues = [{"name": x["name"], "id": x["id"][12:]} for x in tableleagues]
+    matchleagues = League.getLeagues()
+
+    tableleagues += [x for x in matchleagues if x not in tableleagues]
+
+    return tableleagues
