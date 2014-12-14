@@ -828,7 +828,7 @@ class League(matchcommon):
         rawpage = self.getPage(self.livescoreslink.format(comp=league))
 
         if rawpage:
-            raw =  BeautifulSoup()
+            raw =  BeautifulSoup(rawpage)
             
             # Find the list of active leagues
             selection = raw.find("div", 
