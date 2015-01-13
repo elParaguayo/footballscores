@@ -21,7 +21,7 @@ from datetime import datetime, time
 import json
 import codecs
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 class matchcommon(object):
@@ -1142,6 +1142,94 @@ class Teams(matchcommon):
             teamlist = sorted(teamlist)
 
         return teamlist
+
+class Results(matchcommon):
+
+    '''class to convert BBC league table format into python list/dict.'''
+
+    resultbase = "http://www.bbc.co.uk/sport/football/results"
+    resultmethod = "filter"
+
+    def __init__(self):
+        pass
+
+    def getCompetitions(self):
+        '''method for getting list of available results pages'''
+
+        complist = []
+        raw = BeautifulSoup(self.getPage(self.resultbase))
+        form = raw.find("div", {"class": "drop-down-filter",
+                                "id": "filter-fixtures-no-js"})
+        self.resultmethod = form.find("select").get("name")
+        comps = form.findAll("option")
+        for comp in comps:
+            l = {}
+            if comp.get("value") <> "":
+                l["name"] = comp.text
+                l["id"] = comp.get("value")
+                complist.append(l)
+        return complist
+
+    def getResults(self, compid):
+        '''method for creating league table of selected league.'''
+
+        result = []
+
+        leaguepage = "%s?%s=%s" % (self.resultbase,
+                                   self.resultmethod,
+                                   compid)
+
+        raw = BeautifulSoup(self.getPage(leaguepage))
+
+        raw = raw.find("div", {"class": re.compile(r"\bfixtures-table\b")})
+
+        while raw.find("h2", {"class": "table-header"}) is not None:
+
+
+            resultdate = raw.find("h2", {"class": "table-header"})
+            matchdate = resultdate.text.strip()
+            resultdate.extract()
+
+            results = raw.find("table", {"class": "table-stats"})
+
+            matches = []
+
+            for matchresult in results.findAll("tr", {"id": re.compile(r'^match-row')}):
+                hometeam = matchresult.find("span", {"class": re.compile(r'^team-home')}).text.strip()
+                awayteam = matchresult.find("span", {"class": re.compile(r'^team-away')}).text.strip()
+                score = matchresult.find("span", {"class": "score"}).text.strip()
+                matches.append({"hometeam": hometeam,
+                                "awayteam": awayteam,
+                                "score": score})
+
+            resultday = {"date": matchdate,
+                         "results": matches}
+
+            result.append(resultday)
+
+            results.extract()
+
+
+        #     lg = {}
+        #     teamlist = []
+        #
+        #     leaguename = table.find("h2", {"class": "table-header"})
+        #
+        #     for tag in ["div", "script"]:
+        #         for nest in leaguename.findAll(tag):
+        #             nest.extract()
+        #
+        #     lg["name"] = leaguename.text.strip()
+        #
+        #     for team in table.findAll("tr", {"id": re.compile(r'team')}):
+        #         t = team.text
+        #         print t
+        #         teamlist.append(t)
+        #
+        #     lg["table"] = teamlist
+        #     result.append(lg)
+        #
+        return result
 
 def getAllLeagues():
 
