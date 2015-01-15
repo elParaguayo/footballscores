@@ -1209,26 +1209,73 @@ class Results(matchcommon):
 
             results.extract()
 
+        return result
 
-        #     lg = {}
-        #     teamlist = []
-        #
-        #     leaguename = table.find("h2", {"class": "table-header"})
-        #
-        #     for tag in ["div", "script"]:
-        #         for nest in leaguename.findAll(tag):
-        #             nest.extract()
-        #
-        #     lg["name"] = leaguename.text.strip()
-        #
-        #     for team in table.findAll("tr", {"id": re.compile(r'team')}):
-        #         t = team.text
-        #         print t
-        #         teamlist.append(t)
-        #
-        #     lg["table"] = teamlist
-        #     result.append(lg)
-        #
+
+class Fixtures(matchcommon):
+
+    '''class to convert BBC league table format into python list/dict.'''
+
+    fixturebase = "http://www.bbc.co.uk/sport/football/fixtures"
+    fixturemethod = "filter"
+
+    def __init__(self):
+        pass
+
+    def getCompetitions(self):
+        '''method for getting list of available results pages'''
+
+        complist = []
+        raw = BeautifulSoup(self.getPage(self.fixturebase))
+        form = raw.find("div", {"class": "drop-down-filter",
+                                "id": "filter-fixtures-no-js"})
+        self.fixturemethod = form.find("select").get("name")
+        comps = form.findAll("option")
+        for comp in comps:
+            l = {}
+            if comp.get("value") <> "":
+                l["name"] = comp.text
+                l["id"] = comp.get("value")
+                complist.append(l)
+        return complist
+
+    def getFixtures(self, compid):
+        '''method for creating league table of selected league.'''
+
+        result = []
+
+        leaguepage = "%s?%s=%s" % (self.fixturebase,
+                                   self.fixturemethod,
+                                   compid)
+
+        raw = BeautifulSoup(self.getPage(leaguepage))
+
+        raw = raw.find("div", {"class": re.compile(r"\bfixtures-table\b")})
+
+        while raw.find("h2", {"class": "table-header"}) is not None:
+
+
+            fixturedate = raw.find("h2", {"class": "table-header"})
+            matchdate = fixturedate.text.strip()
+            fixturedate.extract()
+
+            results = raw.find("table", {"class": "table-stats"})
+
+            matches = []
+
+            for matchresult in results.findAll("tr", {"id": re.compile(r'^match-row')}):
+                hometeam = matchresult.find("span", {"class": re.compile(r'^team-home')}).text.strip()
+                awayteam = matchresult.find("span", {"class": re.compile(r'^team-away')}).text.strip()
+                matches.append({"hometeam": hometeam,
+                                "awayteam": awayteam})
+
+            resultday = {"date": matchdate,
+                         "fixtures": matches}
+
+            result.append(resultday)
+
+            results.extract()
+
         return result
 
 def getAllLeagues():
