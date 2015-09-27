@@ -54,7 +54,7 @@ class matchcommon(object):
             r = requests.get(url, timeout=2)
         # requests timeout doesn'r catch socket.timeout so we need to catch
         # both explicitly
-        except (socket.timeout, requests.Timeout):
+        except (socket.timeout, requests.Timeout, requests.ConnectionError):
             return None
 
         if r.status_code == 200:
