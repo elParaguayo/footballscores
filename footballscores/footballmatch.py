@@ -9,6 +9,8 @@ from time import sleep
 from .base import matchcommon
 from .matchdict import MatchDict
 from .matchdict import MatchDictKeys as MDKey
+from .matchevent import MatchEvent
+from .playeraction import PlayerAction
 
 import morphlinks as ML
 
@@ -18,8 +20,9 @@ class FootballMatch(matchcommon):
     '''Class for getting details of individual football matches.
     Data is pulled from BBC live scores page.
     '''
-    # self.accordionlink = "http://polling.bbc.co.uk/sport/shared/football/accordion/partial/collated"
-    scoreslink = "/data/bbc-morph-football-scores-match-list-data/endDate/{end_date}/startDate/{start_date}/{source}/version/2.2.3/withPlayerActions/{detailed}"
+    scoreslink = ("/data/bbc-morph-football-scores-match-list-data/endDate/"
+                  "{end_date}/startDate/{start_date}/{source}/version/2.2.3/"
+                  "withPlayerActions/{detailed}")
 
 
     detailprefix =   ("http://www.bbc.co.uk/sport/football/live/"
@@ -28,9 +31,20 @@ class FootballMatch(matchcommon):
     match_format = {"%H": "HomeTeam",
                     "%A": "AwayTeam",
                     "%h": "HomeScore",
-                    "%a": "AwayScore"}
+                    "%a": "AwayScore",
+                    "%v": "Venue",
+                    "%T": "DisplayTime",
+                    "%S": "Status",
+                    "%R": "HomeRedCards",
+                    "%r": "AwayRedCards",
+                    "%G": "HomeScorers",
+                    "%g": "AwayScorers",
+                    "%C": "Competition"}
 
-    def __init__(self, team, detailed = False, data = None):
+    ACTION_GOAL = "goal"
+    ACTION_RED_CARD = "red-card"
+
+    def __init__(self, team, detailed = True, data = None):
         '''Creates an instance of the Match object.
         Must be created by passing the name of one team.
 
@@ -43,7 +57,9 @@ class FootballMatch(matchcommon):
         super(FootballMatch, self).__init__()
         self.detailed = detailed
         self.myteam = team
-        self.match = None
+        self.match = MatchDict()
+        self._on_red = self._on_goal = self._on_status_change = None
+        self._clearFlags()
 
         self.hasTeamPage = self._findTeamPage()
 
@@ -53,35 +69,64 @@ class FootballMatch(matchcommon):
         if self.hasTeamPage:
             self.update()
 
+    def _no_match(default):
+        """
+        Decorator to provide default values for properties when there is no
+        match found.
 
-        # # Set the relevant urls
-        # self.detailedmatchpage = None
-        # self.scorelink = None
-        #
-        # # Boolean to notify user if there is a valid match
-        # self.matchfound = False
-        #
-        # # Which team am I following?
-        # self.myteam = team
-        #
-        # self.__resetMatch()
-        #
-        # # Let's try and load some data
-        # data = self.__loadData(data)
-        #
-        # # If our team is found or we have data
-        # if data:
-        #
-        #     # Update the class properties
-        #     self.__update(data)
-        #     # No notifications for now
-        #     self.goal = False
-        #     self.statuschange = False
-        #     self.newmatch = False
+        e.g.:
+            @property
+            @_no_match(str())
+            def HomeTeam(self):
+                ...
+        """
+        def wrapper(func):
+
+            def wrapped(self):
+
+                if self.match:
+                    return func(self)
+
+                else:
+                    return default
+
+            return wrapped
+
+        return wrapper
+
+
+    def _override_none(value):
+        """
+        Decorator to provide default values for properties when there is no
+        current value.
+
+        For example, this decorator can be used to convert a None value for a
+        match score (empty before the match starts) to 0.
+
+        e.g.:
+            @property
+            @_no_match(int())
+            @_override_none(0)
+            def HomeScore(self):
+                ...
+        """
+        def wrapper(func):
+
+            def wrapped(self):
+
+                if func(self) is None:
+                    return value
+
+                else:
+                    return func(self)
+
+            return wrapped
+
+        return wrapper
 
     def _scanLeagues(self):
 
-        return self.getScoresFixtures(source=ML.MORPH_FIXTURES_ALL,
+        return self._getScoresFixtures(source=ML.MORPH_FIXTURES_ALL,
                                       detailed=False)
 
     def _findTeamPage(self):
@@ -123,13 +168,61 @@ class FootballMatch(matchcommon):
 
 
     def __findMatch(self, payload):
-        match = payload["matchData"][0]["tournamentDatesWithEvents"].values()[0][0]["events"][0]
-        return match
+        match = payload["matchData"]
+
+        if match:
+            return match[0]["tournamentDatesWithEvents"].values()[0][0]["events"][0]
+        else:
+            return None
 
     def _setCallbacks(self):
         self.match.add_callback(MDKey.HOME_TEAM, self._checkHomeTeamEvent)
         self.match.add_callback(MDKey.AWAY_TEAM, self._checkAwayTeamEvent)
-        self.match.add_callback(MDKey.EVENT_STATUS, self._checkStatus)
+        self.match.add_callback(MDKey.PROGRESS, self._checkStatus)
+
+    def __getEvents(self, event, event_type):
+        events = []
+
+        player_actions = event.get("playerActions", list())
+
+        for acts in player_actions:
+            player = acts["name"]["abbreviation"]
+            for act in acts["actions"]:
+                if act["type"] == event_type:
+                    pa = PlayerAction(acts, act)
+                    events.append(pa)
+
+        return sorted(events)
+
+    def _lastEvent(self, event_type):
+        events = self.__getEvents(self.match.homeTeam, event_type)
+        events += self.__getEvents(self.match.awayTeam, event_type)
+        # events = sorted(events, key=lambda x: (x[1], x[2]))
+        events = sorted(events)
+
+        if events:
+            return events[-1]
+        else:
+            return []
+
+
+    def _getReds(self, event):
+        return self.__getEvents(event, self.ACTION_RED_CARD)
+
+    def _getGoals(self, event):
+        return self.__getEvents(event, self.ACTION_GOAL)
+
+
+    def _checkGoal(self, old, new):
+        return (old.scores.score != new.scores.score) and (new.scores.score > 0)
+
+    def _checkRed(self, old, new):
+
+        old_reds = self._getReds(old)
+        new_reds = self._getReds(new)
+
+        return old_reds != new_reds
+
 
     def _checkHomeTeamEvent(self, event):
         self._checkTeamEvent(event, home=True)
@@ -138,9 +231,76 @@ class FootballMatch(matchcommon):
         self._checkTeamEvent(event, home=False)
 
     def _checkTeamEvent(self, event, home=True):
-        pass
+
+        if home:
+            old = self._old.homeTeam
+        else:
+            old = self._old.awayTeam
+
+        new = MatchDict(event)
+
+        goal = self._checkGoal(old, new)
+        red = self._checkRed(old, new)
+
+        if goal:
+            if home:
+                self._homegoal = True
+            else:
+                self._awaygoal = True
+
+        if red:
+            if home:
+                self._homered = True
+            else:
+                self._awayred = True
+
 
     def _checkStatus(self, status):
+        self._statuschange = True
+
+    def _clearFlags(self):
+        self._homegoal = False
+        self._awaygoal = False
+        self._homered = False
+        self._awayred = False
+        self._statuschange = False
+
+    def _fireEvent(self, func, payload):
+
+        try:
+            func(payload)
+        except TypeError:
+            pass
+
+    def _fireEvents(self):
+
+        if self._homegoal:
+            func = self.on_goal
+            payload = MatchEvent(MatchEvent.TYPE_GOAL, self, True)
+            self._fireEvent(func, payload)
+
+        if self._awaygoal:
+            func = self.on_goal
+            payload = MatchEvent(MatchEvent.TYPE_GOAL, self, False)
+            self._fireEvent(func, payload)
+
+        if self._homered:
+            func = self.on_goal
+            payload = MatchEvent(MatchEvent.TYPE_RED_CARD, self, True)
+            self._fireEvent(func, payload)
+
+        if self._awayred:
+            func = self.on_goal
+            payload = MatchEvent(MatchEvent.TYPE_RED_CARD, self, False)
+            self._fireEvent(func, payload)
+
+        if self._statuschange:
+            func = self.on_status_change
+            payload = MatchEvent(MatchEvent.TYPE_STATUS, self)
+            self._fireEvent(func, payload)
+
+    def _formatEvents(self, events, event_type=ACTION_GOAL):
+
         pass
 
     def formatMatch(self, fmt):
@@ -162,14 +322,23 @@ class FootballMatch(matchcommon):
             match = json.loads(data[0]["payload"])
             match = self.__findMatch(match)
 
-            if self.match is None:
-                self.match = MatchDict(match)
-                self._setCallbacks()
-                self._old = self.match
+            if match:
+
+                if not self.match:
+                    self.match = MatchDict(match, add_callbacks=True)
+                    self._setCallbacks()
+                    self._old = self.match
+
+                else:
+                    self._clearFlags()
+                    self.match.update(match)
+                    self._fireEvents()
+                    self._old = self.match
 
             else:
-                self.match.update(match)
-                self._old = self.match
+                self._clearFlags()
+                self._old = None
+                self.match = None
 
             return True
 
@@ -192,365 +361,25 @@ class FootballMatch(matchcommon):
     #
     #         return None
     #
-    # def __resetMatch(self):
-    #     '''Clear all variables'''
-    #     self.hometeam = None
-    #     self.awayteam = None
-    #     self.homescore = None
-    #     self.awayscore = None
-    #     self.scorelink = None
-    #     self.homescorers = None
-    #     self.awayscorers = None
-    #     self.homeyellowcards = []
-    #     self.awayyellowcards = []
-    #     self.homeredcards = []
-    #     self.awayredcards = []
-    #     self.competition = None
-    #     self.matchtime = None
-    #     self.status = None
-    #     self.goal = False
-    #     self.statuschange = False
-    #     self.newmatch = False
-    #     self.homebadge = None
-    #     self.awaybadge = None
-    #     self.matchid = None
-    #     self.matchlink = None
-    #     self.rawincidents = []
-    #     self.booking = False
-    #     self.redcard = False
-    #     self.leagueid = None
-    #
-    #
-    # def __findMatch(self):
-    #     leaguepage = self.getPage(self.livescoreslink.format(comp=""))
-    #     data = None
-    #     teamfound = False
-    #
-    #     if leaguepage:
-    #
-    #         # Start with the default page so we can get list of active leagues
-    #         raw =  BeautifulSoup(leaguepage)
-    #
-    #         # Find the list of active leagues
-    #         selection = raw.find("div", {"class":
-    #                                      "drop-down-filter live-scores-fixtures"})
-    #
-    #
-    #         # Loop throught the active leagues
-    #         for option in selection.findAll("option"):
-    #
-    #             # Build the link for that competition
-    #             league = option.get("value")[12:]
-    #
-    #             if league:
-    #                 scorelink = self.livescoreslink.format(comp=league)
-    #
-    #                 scorepage = self.getPage(scorelink)
-    #
-    #                 if scorepage:
-    #                     # Prepare to process page
-    #                     optionhtml = BeautifulSoup(scorepage)
-    #
-    #                     # We just want the live games...
-    #                     live = optionhtml.find("div", {"id": "matches-wrapper"})
-    #
-    #                     # Let's look for our team
-    #                     if live.find(text=self.myteam):
-    #                         teamfound = True
-    #                         self.scorelink = scorelink
-    #                         self.competition = option.text.split("(")[0].strip()
-    #                         self.leagueid = league
-    #                         data = live
-    #                         break
-    #
-    #     self.matchfound = teamfound
-    #
-    #     return data
-    #
-    # def __getScores(self, data, update = False):
-    #
-    #     for match in data.findAll("tr", {"id": re.compile(r'^match-row')}):
-    #         if match.find(text=self.myteam):
-    #
-    #             self.hometeam = match.find("span", {"class": "team-home"}).text ## ENCODE
-    #
-    #             self.awayteam = match.find("span", {"class": "team-away"}).text
-    #
-    #             linkrow = match.find("td", {"class": "match-link"})
-    #             try:
-    #                 link = linkrow.find("a").get("href")
-    #                 self.matchlink = "http://www.bbc.co.uk%s" % (link)
-    #             except AttributeError:
-    #                 self.matchlink = None
-    #
-    #             if match.get("class") == "fixture":
-    #                 status = "Fixture"
-    #                 matchtime = match.find("span",
-    #                                  {"class":
-    #                                  "elapsed-time"}).text.strip()[:5]
-    #
-    #             elif match.get("class") == "report":
-    #                 status = "FT"
-    #                 matchtime = None
-    #
-    #             elif ("%s" %
-    #                  (match.find("span",
-    #                  {"class": "elapsed-time"}).text.strip()) == "Half Time"):
-    #                 status = "HT"
-    #                 matchtime = None
-    #
-    #             else:
-    #                 status = "L"
-    #                 matchtime = match.find("span",
-    #                                  {"class": "elapsed-time"}).text.strip()
-    #
-    #             matchid = match.get("id")[10:]
-    #
-    #             score = match.find("span",
-    #                              {"class": "score"}).text.strip().split(" - ")
-    #
-    #             try:
-    #                 homescore = int(score[0].strip())
-    #                 awayscore = int(score[1].strip())
-    #
-    #             except:
-    #                 homescore = 0
-    #                 awayscore = 0
-    #
-    #             self.statuschange = False
-    #             self.newmatch = False
-    #             self.goal=False
-    #
-    #             if update:
-    #
-    #                 if not status == self.status:
-    #                     self.statuschange = True
-    #
-    #                 if not matchid == self.matchid:
-    #                     self.newmatch = True
-    #
-    #                 if not (homescore == self.homescore and
-    #                         awayscore == self.awayscore):
-    #                     # Gooooooooooooaaaaaaaaaaaaaaaaallllllllllllllllll!
-    #                     self.goal = True
-    #
-    #             self.status = status if status else None ## ENCODE
-    #             self.matchtime = matchtime if matchtime else None ## ENCODE
-    #             self.matchid = matchid if matchid else None ## ENCODE
-    #             self.homescore = homescore
-    #             self.awayscore = awayscore
-    #
-    #
-    # def __update(self, data = None):
-    #
-    #     self.__getScores(data)
-    #
-    #     if self.detailed:
-    #         self.__getDetails()
-    #
-    # def __loadData(self, data = None):
-    #
-    #     self.matchfound = False
-    #
-    #     if data:
-    #         if data.find(text=self.myteam):
-    #             self.matchfound = True
-    #         else:
-    #             data = None
-    #
-    #     if not data and self.scorelink:
-    #         scorepage = self.getPage(self.scorelink)
-    #         if scorepage:
-    #             scorehtml = BeautifulSoup(scorepage)
-    #             data = scorehtml.find("div", {"id": "matches-wrapper"})
-    #             if data.find(text=self.myteam):
-    #                 self.matchfound = True
-    #             else:
-    #                 data = None
-    #         else:
-    #             data = None
-    #
-    #     if not data:
-    #         data = self.__findMatch()
-    #
-    #     if not data:
-    #         self.__resetMatch()
-    #
-    #     return data
-    #
-    # def Update(self, data = None):
-    #
-    #     data = self.__loadData(data)
-    #
-    #     if data:
-    #         self.__getScores(data, update = True)
-    #
-    #     if self.detailed:
-    #         self.__getDetails()
-    #
-    # def __getDetails(self):
-    #
-    #     if self.matchid:
-    #         # Prepare bautiful soup to scrape match page
-    #
-    #
-    #             # Let's get the home and away team detail sections
-    #         try:
-    #             bs =  BeautifulSoup(self.getPage(self.detailprefix.format(
-    #                                          id=self.matchid)))
-    #             incidents = bs.find("table",
-    #                                {"class": "incidents-table"}).findAll("tr")
-    #         except:
-    #             incidents = None
-    #
-    #         # Get incidents
-    #         # This populates variables with details of scorers and bookings
-    #         # Incidents are stored in a list of tuples: format is:
-    #         # [(Player Name, [times of incidents])]
-    #         hsc = []
-    #         asc = []
-    #         hyc = []
-    #         ayc = []
-    #         hrc = []
-    #         arc = []
-    #
-    #         if incidents:
-    #
-    #             self.__goalscorers = []
-    #             self.__yellowcards = []
-    #             self.__redcards = []
-    #
-    #             for incident in incidents:
-    #                 i = incident.find("td",
-    #                                  {"class":
-    #                                  re.compile(r"\bincident-type \b")})
-    #                 if i:
-    #                     h = incident.find("td",
-    #                                      {"class":
-    #                                      "incident-player-home"}).text.strip()
-    #
-    #                     a = incident.find("td",
-    #                                      {"class":
-    #                                      "incident-player-away"}).text.strip()
-    #
-    #                     t = incident.find("td",
-    #                                      {"class":
-    #                                      "incident-time"}).text.strip()
-    #
-    #                     if "goal" in i.get("class"):
-    #                         if h:
-    #                             hsc = self.__addIncident(hsc, h, t) ## ENCODE
-    #                             self.__goalscorers.append((self.hometeam, h, t))
-    #                             self.__addRawIncident("home", "goal", h, t)
-    #                         else:
-    #                             asc = self.__addIncident(asc, a, t)
-    #                             self.__goalscorers.append((self.awayteam, a, t))
-    #                             self.__addRawIncident("away", "goal", a, t)
-    #
-    #                     elif "yellow-card" in i.get("class"):
-    #                         if h:
-    #                             hyc = self.__addIncident(hyc, h, t)
-    #                             self.__yellowcards.append((self.hometeam, h, t))
-    #                             self.__addRawIncident("home", "yellow", h, t)
-    #                         else:
-    #                             ayc = self.__addIncident(ayc, a, t)
-    #                             self.__yellowcards.append((self.awayteam, a, t))
-    #                             self.__addRawIncident("away", "yellow", a, t)
-    #
-    #                     elif "red-card" in i.get("class"):
-    #                         if h:
-    #                             hrc = self.__addIncident(hrc, h, t)
-    #                             self.__redcards.append((self.hometeam, h, t))
-    #                             self.__addRawIncident("home", "red", h, t)
-    #                         else:
-    #                             arc = self.__addIncident(arc, a, t)
-    #                             self.__redcards.append((self.awayteam, a, t))
-    #                             self.__addRawIncident("away", "red", a, t)
-    #
-    #         self.booking = not (self.homeyellowcards == hyc and
-    #                             self.awayyellowcards == ayc)
-    #
-    #         self.redcard = not (self.homeredcards == hrc and
-    #                            self.awayredcards == arc)
-    #
-    #         self.homescorers = hsc
-    #         self.awayscorers = asc
-    #         self.homeyellowcards = hyc
-    #         self.awayyellowcards = ayc
-    #         self.homeredcards = hrc
-    #         self.awayredcards = arc
-    #
-    # def __addIncident(self, incidentlist, player, incidenttime):
-    #     '''method to add incident to list variable'''
-    #     found = False
-    #     for incident in incidentlist:
-    #         if incident[0] == player:
-    #             incident[1].append(incidenttime)
-    #             found = True
-    #             break
-    #
-    #     if not found:
-    #         incidentlist.append((player, [incidenttime]))
-    #
-    #     return incidentlist
-    #
-    # def __addRawIncident(self, team, incidenttype, player, incidenttime):
-    #
-    #     incident = (team, incidenttype, player, incidenttime)
-    #
-    #     if not incident in self.rawincidents:
-    #         self.rawincidents.append(incident)
-    #
-    # def formatIncidents(self, incidentlist, newline = False):
-    #     '''Incidents are in the following format:
-    #     List:
-    #       [Tuple:
-    #         (Player name, [list of times of incidents])]
-    #
-    #     This function converts the list into a string.
-    #     '''
-    #     temp = []
-    #     incidentjoin = "\n" if newline else ", "
-    #
-    #     for incident in incidentlist:
-    #         temp.append("%s (%s)" % (incident[0],
-    #                                  ", ".join(incident[1])))
-    #
-    #     return incidentjoin.join(temp)
-    #
-    # def getTeamBadges(self):
-    #     found = False
-    #
-    #     if self.matchlink:
-    #         badgepage = self.getPage(self.matchlink)
-    #         if badgepage:
-    #             linkpage = BeautifulSoup(badgepage)
-    #             badges = linkpage.findAll("div", {"class": "team-badge"})
-    #             if badges:
-    #                 self.homebadge = badges[0].find("img").get("src")
-    #                 self.awaybadge = badges[1].find("img").get("src")
-    #                 found = True
-    #
-    #     return found
-    #
-    #
-    # def __nonzero__(self):
-    #
-    #     return self.matchfound
-    #
-    # def __repr__(self):
-    #
-    #     return "FootballMatch(\'%s\', detailed=%s)" % (self.myteam,
-    #                                                       self.detailed)
-    #
-    # def __eq__(self, other):
-    #     if isinstance(other, self.__class__):
-    #         if not self.matchid is None:
-    #             return self.matchid == other.matchid
-    #         else:
-    #             return self.myteam == other.myteam
-    #     else:
-    #         return False
+
+
+    def __nonzero__(self):
+
+        return bool(self.match)
+
+    def __repr__(self):
+
+        return "<FootballMatch(\'%s\')>" % (self.myteam)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.match.eventKey == other.match.eventKey
+            if self.match and other.match:
+                return self.match.eventKey == other.match.eventKey
+            else:
+                return self.myteam == other.myteam
+        else:
+            return False
     #
     # # Neater functions to return data:
     #
@@ -559,19 +388,19 @@ class FootballMatch(matchcommon):
     def on_goal(self):
 
         if self._on_goal:
-            self._on_goal(self)
+            return self._on_goal
 
     @on_goal.setter
     def on_goal(self, func):
 
         if callable(func):
-            self.on_goal = func
+            self._on_goal = func
 
     @property
     def on_red(self):
 
         if self._on_red:
-            self._on_red(self)
+            return self._on_red
 
     @on_red.setter
     def on_red(self, func):
@@ -583,7 +412,7 @@ class FootballMatch(matchcommon):
     def on_status_change(self):
 
         if self._on_status_change:
-            self._on_status_change(self)
+            return self._on_status_change
 
     @on_status_change.setter
     def on_status_change(self, func):
@@ -592,6 +421,7 @@ class FootballMatch(matchcommon):
             self._on_status_change = func
 
     @property
+    @_no_match(str())
     def HomeTeam(self):
         """Returns string of the home team's name
 
@@ -599,6 +429,7 @@ class FootballMatch(matchcommon):
         return self.match.homeTeam.name.full
 
     @property
+    @_no_match(str())
     def AwayTeam(self):
         """Returns string of the away team's name
 
@@ -606,6 +437,8 @@ class FootballMatch(matchcommon):
         return self.match.awayTeam.name.full
 
     @property
+    @_no_match(int())
+    @_override_none(0)
     def HomeScore(self):
         """Returns the number of goals scored by the home team
 
@@ -613,189 +446,127 @@ class FootballMatch(matchcommon):
         return self.match.homeTeam.scores.score
 
     @property
+    @_no_match(int())
+    @_override_none(0)
     def AwayScore(self):
         """Returns the number of goals scored by the away team
 
         """
         return self.match.awayTeam.scores.score
-    #
-    # @property
-    # def Competition(self):
-    #     """Returns the name of the competition to which the match belongs
-    #
-    #     e.g. "Premier League", "FA Cup" etc
-    #
-    #     """
-    #     return self.competition
-    #
+
     @property
+    @_no_match(str())
+    def Competition(self):
+        """Returns the name of the competition to which the match belongs
+
+        e.g. "Premier League", "FA Cup" etc
+
+        """
+        return self.match.tournamentName.full
+
+    @property
+    @_no_match(str())
     def Status(self):
         """Returns the status of the match
 
         e.g. "L", "HT", "FT"
 
         """
-        return self.match.eventProgress.status
-    #
-    # @property
-    # def Goal(self):
-    #     """Boolean. Returns True if score has changed since last update
-    #
-    #     """
-    #     return self.goal
-    #
-    # @property
-    # def StatusChanged(self):
-    #     """Boolean. Returns True if status has changed since last update
-    #
-    #     e.g. Match started, half-time started etc
-    #
-    #     """
-    #     return self.statuschange
-    #
-    # @property
-    # def NewMatch(self):
-    #     """Boolean. Returns True if the match found since last update
-    #
-    #     """
-    #     return self.newmatch
-    #
-    # @property
-    # def MatchFound(self):
-    #     """Boolean. Returns True if a match is found in JSON feed
-    #
-    #     """
-    #     return self.matchfound
-    #
-    # @property
-    # def HomeBadge(self):
-    #     """Returns link to image for home team's badge
-    #
-    #     """
-    #     return self.homebadge
-    #
-    # @property
-    # def AwayBadge(self):
-    #     """Returns link to image for away team's badge
-    #
-    #     """
-    #     return self.awaybadge
-    #
-    # @property
-    # def HomeScorers(self):
-    #     """Returns list of goalscorers for home team
-    #
-    #     """
-    #     return self.homescorers
-    #
-    # @property
-    # def AwayScorers(self):
-    #     """Returns list of goalscorers for away team
-    #
-    #     """
-    #     return self.awayscorers
-    #
-    # @property
-    # def HomeYellowCards(self):
-    #     """Returns list of players receiving yellow cards for home team
-    #
-    #     """
-    #     return self.homeyellowcards
-    #
-    # @property
-    # def AwayYellowCards(self):
-    #     """Returns list of players receiving yellow cards for away team
-    #
-    #     """
-    #     return self.awayyellowcards
-    #
-    # @property
-    # def HomeRedCards(self):
-    #     """Returns list of players sent off for home team
-    #
-    #     """
-    #     return self.homeredcards
-    #
-    # @property
-    # def AwayRedCards(self):
-    #     """Returns list of players sent off for away team
-    #
-    #     """
-    #     return self.awayredcards
-    #
-    # @property
-    # def LastGoalScorer(self):
-    #     if self.detailed:
-    #         if self.__goalscorers:
-    #             return self.__goalscorers[-1]
-    #         else:
-    #             return None
-    #     else:
-    #         return None
-    #
-    # @property
-    # def LastYellowCard(self):
-    #     if self.detailed:
-    #         if self.__yellowcards:
-    #             return self.__yellowcards[-1]
-    #         else:
-    #             return None
-    #     else:
-    #         return None
-    #
-    # @property
-    # def LastRedCard(self):
-    #     if self.detailed:
-    #         if self.__redcards:
-    #             return self.__redcards[-1]
-    #         else:
-    #             return None
-    #     else:
-    #         return None
-    #
-    # @property
-    # def MatchDate(self):
-    #     """Returns date of match i.e. today's date
-    #
-    #     """
-    #     d = datetime.now()
-    #     datestring = "%s %d %s" % (
-    #                                     d.strftime("%A"),
-    #                                     d.day,
-    #                                     d.strftime("%B %Y")
-    #                                   )
-    #     return datestring
-    #
-    # @property
-    # def MatchTime(self):
-    #     """If detailed info available, returns match time in minutes.
-    #
-    #     If not, returns Status.
-    #
-    #     """
-    #     if self.status=="L" and self.matchtime is not None:
-    #         return self.matchtime
-    #     else:
-    #         return self.Status
-    #
-    # def abbreviate(self, cut):
-    #     """Returns short formatted summary of match but team names are
-    #     truncated according to the cut parameter.
-    #
-    #     e.g. abbreviate(3):
-    #       "Ars 1-1 Che (L)"
-    #
-    #     Should handle accented characters.
-    #
-    #     """
-    #     return u"%s %s-%s %s (%s)" % (
-    #                                   self.hometeam[:cut],
-    #                                   self.homescore,
-    #                                   self.awayscore,
-    #                                   self.awayteam[:cut],
-    #                                   self.Status
-    #                                   )
-    #
+        return self.match.eventProgress.period
+
+    @property
+    @_no_match(str())
+    def DisplayTime(self):
+        me = self.match.minutesElapsed
+        et = self.match.minutesIntoAddedTime
+
+        miat = u"+{}".format(et) if et else ""
+
+        if me:
+            return u"{}{}".format(me, miat)
+        else:
+            return None
+
+    @property
+    @_no_match(int())
+    def ElapsedTime(self):
+        return self.match.minutesElapsed
+
+    @property
+    @_no_match(int())
+    def AddedTime(self):
+        return self.match.minutesIntoAddedTime
+
+    @property
+    @_no_match(str())
+    def Venue(self):
+        return self.match.venue.name.full
+
+    @property
+    @_no_match(False)
+    def isFixture(self):
+        return self.match.eventStatus == "pre-event"
+
+    @property
+    @_no_match(False)
+    def isLive(self):
+        return self.match.eventStatus == "mid-event"
+
+    @property
+    @_no_match(False)
+    def isFinished(self):
+        return self.match.eventStatus == "post-event"
+
+    @property
+    @_no_match(False)
+    def isInAddedTime(self):
+        return self.match.minutesIntoAddedTime > 0
+
+    @property
+    @_no_match(list())
+    def HomeScorers(self):
+        """Returns list of goalscorers for home team
+
+        """
+        return self._getGoals(self.match.homeTeam)
+
+    @property
+    @_no_match(list())
+    def AwayScorers(self):
+        """Returns list of goalscorers for away team
+
+        """
+        return self._getGoals(self.match.awayTeam)
+
+    @property
+    @_no_match(str())
+    def LastGoal(self):
+        return self._lastEvent(self.ACTION_GOAL)
+
+    @property
+    @_no_match(list())
+    def HomeRedCards(self):
+        """Returns list of players sent off for home team
+
+        """
+        return self._getReds(self.match.homeTeam)
+
+    @property
+    @_no_match(list())
+    def AwayRedCards(self):
+        """Returns list of players sent off for away team
+
+        """
+        return self._getReds(self.match.awayTeam)
+
+
+    @property
+    @_no_match(str())
+    def LastRedCard(self):
+        return self._lastEvent(self.ACTION_RED_CARD)
+      return None
+
+
     def __unicode__(self):
         """Returns short formatted summary of match.
 
@@ -825,45 +596,7 @@ class FootballMatch(matchcommon):
 
         """
         return unicode(self).encode('utf-8')
-    #
-    # @property
-    # def PrintDetail(self):
-    #     """Returns detailed summary of match (if available).
-    #
-    #     e.g. "(L) Arsenal 1-1 Chelsea (Arsenal: Wilshere 10',
-    #           Chelsea: Lampard 48')"
-    #     """
-    #     if self.detailed:
-    #         hscore = False
-    #         scorerstring = ""
-    #
-    #         if self.homescorers or self.awayscorers:
-    #             scorerstring = " ("
-    #             if self.homescorers:
-    #                 hscore = True
-    #                 scorerstring += "%s: %s" % (self.hometeam,
-    #                                             self.formatIncidents(self.homescorers))
-    #
-    #
-    #             if self.awayscorers:
-    #                 if hscore:
-    #                     scorerstring += " - "
-    #                 scorerstring += "%s: %s" % (self.awayteam,
-    #                                             self.formatIncidents(self.awayscorers))
-    #
-    #             scorerstring += ")"
-    #
-    #         return "(%s) %s %s-%s %s%s" % (
-    #                                         self.MatchTime,
-    #                                         self.hometeam,
-    #                                         self.homescore,
-    #                                         self.awayscore,
-    #                                         self.awayteam,
-    #                                         scorerstring
-    #                                         )
-    #     else:
-    #         return self.__str__()
-    #
+
     # @property
     # def TimeToKickOff(self):
     #     '''Returns a timedelta object for the time until the match kicks off.
@@ -889,19 +622,3 @@ class FootballMatch(matchcommon):
     #         timetokickoff = None
     #
     #     return timetokickoff
-    #
-    # @property
-    # def matchdict(self):
-    #     return {"hometeam": self.hometeam,
-    #             "awayteam": self.awayteam,
-    #             "status": self.status,
-    #             "matchtime": self.MatchTime,
-    #             "homescore": self.homescore,
-    #             "awayscore": self.awayscore,
-    #             "homescorers": self.homescorers,
-    #             "awayscorers": self.awayscorers,
-    #             "homeyellow": self.homeyellowcards,
-    #             "awayyellow": self.awayyellowcards,
-    #             "homered": self.homeredcards,
-    #             "awayred": self.awayredcards,
-    #             "incidentlist": self.rawincidents}
