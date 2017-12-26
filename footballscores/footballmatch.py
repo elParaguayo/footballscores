@@ -1,20 +1,29 @@
-import string
-from BeautifulSoup import BeautifulSoup
-import re
 from datetime import datetime, time
+from itertools import groupby
 import json
 from time import sleep
-
 
 from .base import matchcommon
 from .matchdict import MatchDict
 from .matchdict import MatchDictKeys as MDKey
 from .matchevent import MatchEvent
 from .playeraction import PlayerAction
-
+from .utils import UTC
 import morphlinks as ML
 
-import web_pdb
+# dateutil is not part of the standard library so let's see if we can import
+# and set a flag showing success or otherwise
+try:
+    import dateutil.parser
+    HAS_DATEUTIL = True
+
+except ImportError:
+    HAS_DATEUTIL = False
+
+
+# We need a UTC timezone to do some datetime manipulations
+TZ_UTZ = UTC()
+
 
 class FootballMatch(matchcommon):
     '''Class for getting details of individual football matches.
@@ -43,8 +52,17 @@ class FootballMatch(matchcommon):
 
     ACTION_GOAL = "goal"
     ACTION_RED_CARD = "red-card"
+    ACTION_YELLOW_RED_CARD = "yellow-red-card"
 
-    def __init__(self, team, detailed = True, data = None):
+    STATUS_HALF_TIME = "HALFTIME"
+    STATUS_FULL_TIME = "FULLTIME"
+    STATUS_FIXTURE = "FIXTURE"
+    STATUS_ET_FIRST_HALF = "EXTRATIMEFIRSTHALF"
+    STATUS_ET_HALF_TIME = "EXTRATIMEHALFTIME"
+
+    def __init__(self, team, detailed = True, data = None, on_goal=None,
+                 on_red=None, on_status_change=None, on_new_match=None,
+                 matchdate=None):
         '''Creates an instance of the Match object.
         Must be created by passing the name of one team.
 
@@ -58,7 +76,13 @@ class FootballMatch(matchcommon):
         self.detailed = detailed
         self.myteam = team
         self.match = MatchDict()
-        self._on_red = self._on_goal = self._on_status_change = None
+        self._matchdate = self._check_match_date(matchdate)
+
+        self._on_red = on_red
+        self._on_goal = on_goal
+        self._on_status_change = on_status_change
+        self._on_new_match = on_new_match
+
         self._clearFlags()
 
         self.hasTeamPage = self._findTeamPage()
@@ -68,6 +92,26 @@ class FootballMatch(matchcommon):
 
         if self.hasTeamPage:
             self.update()
+
+    def __nonzero__(self):
+
+        return bool(self.match)
+
+    def __repr__(self):
+
+        return "<FootballMatch(\'%s\')>" % (self.myteam)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.match.eventKey == other.match.eventKey
+            if self.match and other.match:
+                return self.match.eventKey == other.match.eventKey
+            else:
+                return self.myteam == other.myteam
+        else:
+            return False
+
+    # Semi-hidden methods, only meant to be called by other class methods
 
     def _no_match(default):
         """
@@ -124,6 +168,31 @@ class FootballMatch(matchcommon):
 
         return wrapper
 
+    def _dump(self, filename):
+
+        c = {k:v for k,v in self.match.iteritems() if k != "_callbacks"}
+
+        with open(filename, "w") as f:
+            json.dump(c, f, indent=4)
+
+    def _check_match_date(self, matchdate):
+
+        if matchdate is None:
+            return None
+
+        try:
+            datetime.strptime(matchdate, "%Y-%m-%d")
+            return matchdate
+
+        except (ValueError, TypeError):
+            raise ValueError("Invalid match date. "
+                             "Match date format must by YYYY-MM-DD.")
+
+    def _canUpdate(self):
+
+        return self.hasTeamPage
+
+
     def _scanLeagues(self):
 
         return self._getScoresFixtures(source=ML.MORPH_FIXTURES_ALL,
@@ -148,10 +217,16 @@ class FootballMatch(matchcommon):
     def _getScoresFixtures(self, start_date=None, end_date=None,
                           source=None, detailed=None):
         if start_date is None:
-            start_date = datetime.now().strftime("%Y-%m-%d")
+            if self._matchdate:
+                start_date = self._matchdate
+            else:
+                start_date = datetime.now().strftime("%Y-%m-%d")
 
         if end_date is None:
-            end_date = datetime.now().strftime("%Y-%m-%d")
+            if self._matchdate:
+                end_date = self._matchdate
+            else:
+                end_date = datetime.now().strftime("%Y-%m-%d")
 
         if source is None and self.hasTeamPage:
             source = self.myteampage
@@ -167,7 +242,7 @@ class FootballMatch(matchcommon):
         return self.sendRequest(pl)
 
 
-    def __findMatch(self, payload):
+    def _findMatch(self, payload):
         match = payload["matchData"]
 
         if match:
@@ -180,7 +255,7 @@ class FootballMatch(matchcommon):
         self.match.add_callback(MDKey.AWAY_TEAM, self._checkAwayTeamEvent)
         self.match.add_callback(MDKey.PROGRESS, self._checkStatus)
 
-    def __getEvents(self, event, event_type):
+    def _getEvents(self, event, event_type):
         events = []
 
         player_actions = event.get("playerActions", list())
@@ -194,23 +269,54 @@ class FootballMatch(matchcommon):
 
         return sorted(events)
 
-    def _lastEvent(self, event_type):
-        events = self.__getEvents(self.match.homeTeam, event_type)
-        events += self.__getEvents(self.match.awayTeam, event_type)
-        # events = sorted(events, key=lambda x: (x[1], x[2]))
+    def _lastEvent(self, event_type, just_home=False, just_away=False):
+        events = []
+
+        if just_home and just_away:
+            just_home = just_away = False
+
+        if not just_away:
+            events += self._getEvents(self.match.homeTeam, event_type)
+
+        if not just_home:
+            events += self._getEvents(self.match.awayTeam, event_type)
+
         events = sorted(events)
 
         if events:
             return events[-1]
         else:
-            return []
+            return None
 
+    def _lastReds(self, just_home=False, just_away=False):
+
+        reds = []
+        red = self._lastEvent(self.ACTION_RED_CARD,
+                             just_home=just_home,
+                             just_away=just_away)
+        yellow = self._lastEvent(self.ACTION_YELLOW_RED_CARD,
+                                 just_home=just_home,
+                                 just_away=just_away)
+
+        if red:
+            reds.append(red)
+
+        if yellow:
+            reds.append(yellow)
+
+        if reds:
+            return sorted(reds)[-1]
+        else:
+            return None
 
     def _getReds(self, event):
-        return self.__getEvents(event, self.ACTION_RED_CARD)
+        reds = []
+        reds += self._getEvents(event, self.ACTION_RED_CARD)
+        reds += self._getEvents(event, self.ACTION_YELLOW_RED_CARD)
+        return sorted(reds)
 
     def _getGoals(self, event):
-        return self.__getEvents(event, self.ACTION_GOAL)
+        return self._getEvents(event, self.ACTION_GOAL)
 
 
     def _checkGoal(self, old, new):
@@ -222,7 +328,6 @@ class FootballMatch(matchcommon):
         new_reds = self._getReds(new)
 
         return old_reds != new_reds
-
 
     def _checkHomeTeamEvent(self, event):
         self._checkTeamEvent(event, home=True)
@@ -254,7 +359,6 @@ class FootballMatch(matchcommon):
             else:
                 self._awayred = True
 
-
     def _checkStatus(self, status):
         self._statuschange = True
 
@@ -264,6 +368,7 @@ class FootballMatch(matchcommon):
         self._homered = False
         self._awayred = False
         self._statuschange = False
+        self._matchfound = False
 
     def _fireEvent(self, func, payload):
 
@@ -299,9 +404,63 @@ class FootballMatch(matchcommon):
             payload = MatchEvent(MatchEvent.TYPE_STATUS, self)
             self._fireEvent(func, payload)
 
-    def _formatEvents(self, events, event_type=ACTION_GOAL):
+        if self._matchfound:
+            func = self.on_new_match
+            payload = MatchEvent(MatchEvent.TYPE_NEW_MATCH, self)
+            self._fireEvent(func, payload)
 
-        pass
+    def _groupedEvents(self, events):
+
+        def timesort(event):
+            return (event.ElapsedTime, event.AddedTime)
+
+        events = sorted(events, key=lambda x: x.FullName)
+        events = [list(y) for x, y in groupby(events, key=lambda x: x.FullName)]
+        events = sorted(events, key=lambda x: timesort(x[0]))
+        events = [sorted(x, key=timesort) for x in events]
+
+        return events
+
+    def _formatEvents(self, events):
+
+        events = self._groupedEvents(events)
+
+        raw = []
+        out = u""
+
+        for event in events:
+
+            name = event[0].AbbreviatedName
+            times = []
+
+            if event[0].isGoal and event[0].isOwnGoal:
+                name = u"{} (OG)".format(name)
+
+            for item in event:
+                dt = item.DisplayTime
+
+                if item.isGoal and item.isPenalty:
+                    dt = u"{} pen".format(dt)
+
+                times.append(dt)
+
+            raw.append((name, times))
+
+        for i, (player, events) in enumerate(raw):
+
+            out += player
+            ev = u" ("
+            ev += u", ".join(events)
+            ev += u")"
+
+            out += ev
+
+            if i < len(raw) - 1:
+                out += u", "
+
+        return out
+
+
 
     def formatMatch(self, fmt):
 
@@ -313,14 +472,34 @@ class FootballMatch(matchcommon):
 
         return fmt
 
-    def update(self):
+    def formatTimeToKickOff(self, fmt):
+
+        ko = self.TimeToKickOff
+
+        if ko is None:
+            return ""
+
+        d = {"d": ko.days}
+        d["h"], rem = divmod(ko.seconds, 3600)
+        d["m"], d["s"] = divmod(rem, 60)
+        d["s"] = int(d["s"])
+
+        return fmt.format(**d)
+
+    def update(self, data=None):
+
+        if data is None and not self._canUpdate():
+            self.hasTeamPage = self._findTeamPage()
+            if not self._canUpdate():
+                return False
+
 
         data = self._getScoresFixtures()
 
         if data:
 
             match = json.loads(data[0]["payload"])
-            match = self.__findMatch(match)
+            match = self._findMatch(match)
 
             if match:
 
@@ -328,6 +507,9 @@ class FootballMatch(matchcommon):
                     self.match = MatchDict(match, add_callbacks=True)
                     self._setCallbacks()
                     self._old = self.match
+                    self._clearFlags()
+                    self._matchfound = True
+                    self._fireEvents()
 
                 else:
                     self._clearFlags()
@@ -344,42 +526,8 @@ class FootballMatch(matchcommon):
 
         return False
 
-    # def __getUKTime(self):
-    #     #api.geonames.org/timezoneJSON?formatted=true&lat=51.51&lng=0.13&username=demo&style=full
-    #     rawbbctime = self.getPage("http://api.geonames.org/timezoneJSON"
-    #                            "?formatted=true&lat=51.51&lng=0.13&"
-    #                            "username=elParaguayo&style=full")
-    #
-    #     bbctime = json.loads(rawbbctime).get("time") if rawbbctime else None
-    #
-    #     if bbctime:
-    #         servertime = datetime.strptime(bbctime,
-    #                                        "%Y-%m-%d %H:%M")
-    #         return servertime
-    #
-    #     else:
-    #
-    #         return None
-    #
 
 
-    def __nonzero__(self):
-
-        return bool(self.match)
-
-    def __repr__(self):
-
-        return "<FootballMatch(\'%s\')>" % (self.myteam)
-
-    def __eq__(self, other):
-        if isinstance(other, self.__class__):
-            return self.match.eventKey == other.match.eventKey
-            if self.match and other.match:
-                return self.match.eventKey == other.match.eventKey
-            else:
-                return self.myteam == other.myteam
-        else:
-            return False
     #
     # # Neater functions to return data:
     #
@@ -419,6 +567,18 @@ class FootballMatch(matchcommon):
 
         if callable(func):
             self._on_status_change = func
+
+    @property
+    def on_new_match(self):
+
+        if self._on_new_match:
+            return self._on_new_match
+
+    @on_new_match.setter
+    def on_new_match(self, func):
+
+        if callable(func):
+            self._on_new_match = func
 
     @property
     @_no_match(str())
@@ -476,24 +636,42 @@ class FootballMatch(matchcommon):
 
     @property
     @_no_match(str())
+    def LongStatus(self):
+
+        return self.match.eventStatusNote
+
+    @property
+    @_no_match(str())
     def DisplayTime(self):
-        me = self.match.minutesElapsed
-        et = self.match.minutesIntoAddedTime
+        me = self.ElapsedTime
+        et = self.AddedTime
 
         miat = u"+{}".format(et) if et else ""
 
-        if me:
-            return u"{}{}".format(me, miat)
+        if self.Status == self.STATUS_HALF_TIME:
+            return u"HT"
+
+        elif self.Status == self.STATUS_FULL_TIME:
+            return u"FT"
+
+        elif self.Status == self.STATUS_FIXTURE:
+            return self.StartTimeUK
+
+        elif me:
+            return u"{}{}'".format(me, miat)
+
         else:
             return None
 
     @property
     @_no_match(int())
+    @_override_none(0)
     def ElapsedTime(self):
         return self.match.minutesElapsed
 
     @property
     @_no_match(int())
+    @_override_none(0)
     def AddedTime(self):
         return self.match.minutesIntoAddedTime
 
@@ -544,6 +722,16 @@ class FootballMatch(matchcommon):
         return self._lastEvent(self.ACTION_GOAL)
 
     @property
+    @_no_match(str())
+    def LastHomeGoal(self):
+        return self._lastEvent(self.ACTION_GOAL, just_home=True)
+
+    @property
+    @_no_match(str())
+    def LastAwayGoal(self):
+        return self._lastEvent(self.ACTION_GOAL, just_away=True)
+
+    @property
     @_no_match(list())
     def HomeRedCards(self):
         """Returns list of players sent off for home team
@@ -559,13 +747,20 @@ class FootballMatch(matchcommon):
         """
         return self._getReds(self.match.awayTeam)
 
+    @property
+    @_no_match(str())
+    def LastHomeRedCard(self):
+        return self._lastReds(just_home=True)
+
+    @property
+    @_no_match(str())
+    def LastAwayRedCard(self):
+        return self._lastReds(just_away=True)
 
     @property
     @_no_match(str())
     def LastRedCard(self):
-        return self._lastEvent(self.ACTION_RED_CARD)
-      return None
-
+        return self._lastReds()
 
     def __unicode__(self):
         """Returns short formatted summary of match.
@@ -582,7 +777,7 @@ class FootballMatch(matchcommon):
                                           self.HomeScore,
                                           self.AwayScore,
                                           self.AwayTeam,
-                                          self.Status
+                                          self.DisplayTime
                                           )
 
         else:
@@ -597,28 +792,49 @@ class FootballMatch(matchcommon):
         """
         return unicode(self).encode('utf-8')
 
-    # @property
-    # def TimeToKickOff(self):
-    #     '''Returns a timedelta object for the time until the match kicks off.
-    #
-    #     Returns None if unable to parse match time or if match in progress.
-    #
-    #     Should be unaffected by timezones as it gets current time from bbc
-    #     server which *should* be the same timezone as matches shown.
-    #     '''
-    #     if self.status == "Fixture":
-    #         try:
-    #             koh = int(self.matchtime[:2])
-    #             kom = int(self.matchtime[3:5])
-    #             kickoff = datetime.combine(
-    #                         datetime.now().date(),
-    #                         time(koh, kom, 0))
-    #             timetokickoff = kickoff - self.__getUKTime()
-    #         except Exception, e:
-    #             timetokickoff = None
-    #         finally:
-    #             pass
-    #     else:
-    #         timetokickoff = None
-    #
-    #     return timetokickoff
+
+    @property
+    @_no_match(str())
+    def StartTimeUK(self):
+
+        return self.match.startTimeInUKHHMM
+
+    @property
+    @_no_match(None)
+    def StartTimeDatetime(self):
+
+        st = self.match.startTime
+
+        if HAS_DATEUTIL:
+            try:
+                return dateutil.parser.parse(st)
+
+            except ValueError:
+                return None
+
+        else:
+            print "NO IMPORT"
+            return None
+
+    @property
+    @_no_match(None)
+    def StartTime(self):
+
+        return self.match.startTime
+
+
+
+    @property
+    @_no_match(None)
+    def TimeToKickOff(self):
+        '''Returns a timedelta object for the time until the match kicks off.
+
+        Returns None if unable to parse match time or if match in progress.
+        '''
+        if HAS_DATEUTIL and self.isFixture:
+
+            return self.StartTimeDatetime.astimezone(TZ_UTZ) - datetime.now(TZ_UTZ)
+
+        else:
+
+            return None

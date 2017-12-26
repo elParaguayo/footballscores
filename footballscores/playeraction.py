@@ -1,28 +1,39 @@
 ACTION_GOAL = "goal"
 ACTION_RED_CARD = "red-card"
+ACTION_YELLOW_RED_CARD = "yellow-red-card"
 
 actions = {ACTION_GOAL: "GOAL",
-           ACTION_RED_CARD: "RED CARD"}
+           ACTION_RED_CARD: "RED CARD",
+           ACTION_YELLOW_RED_CARD: "RED CARD"}
 
 
 class PlayerAction(object):
 
     def __init__(self, player, action):
-        self._fullname = player["name"]["full"]
-        self._abbreviatedname = player["name"]["abbreviation"]
-        self._firstname = player["name"]["first"]
-        self._lastname = player["name"]["last"]
 
-        self._actiontype = action["type"]
-        self._actiondisplaytime = action["displayTime"]
-        self._actionowngoal = action["ownGoal"]
-        self._actionpenalty = action["penalty"]
-        self._actiontime = action["timeElapsed"]
-        self._actionaddedtime = action["addedTime"]
+        if not type(player) == dict:
+            player = dict()
+
+        nm = player.get("name", dict())
+        self._fullname = nm.get("full", u"")
+        self._abbreviatedname = nm.get("abbreviation", u"")
+        self._firstname = nm.get("first", u"")
+        self._lastname = nm.get("last", u"")
+
+        if not type(action) == dict:
+            action = dict()
+
+        self._actiontype = action.get("type", None)
+        self._actiondisplaytime = action.get("displayTime", None)
+        self._actiontime = action.get("timeElapsed", 0)
+        self._actionaddedtime = action.get("addedTime", 0)
+        self._actionowngoal = action.get("ownGoal", False)
+        self._actionpenalty = action.get("penalty", False)
 
     def __lt__(self, other):
         normal = self._actiontime < other._actiontime
-        added = (self._actiontime == other._actiontime) and (self._actionaddedtime < other._actionaddedtime)
+        added = ((self._actiontime == other._actiontime) and
+                 (self._actionaddedtime < other._actionaddedtime))
         return normal or added
 
     def __eq__(self, other):
@@ -32,7 +43,8 @@ class PlayerAction(object):
 
     def __repr__(self):
         return "<{}: {} ({})>".format(actions[self._actiontype],
-                                      self._abbreviatedname.encode("ascii", "replace"),
+                                      self._abbreviatedname.encode("ascii",
+                                                                   "replace"),
                                       self._actiondisplaytime)
 
     @property
@@ -48,7 +60,7 @@ class PlayerAction(object):
         return self._lastname
 
     @property
-    def AbbeviatedName(self):
+    def AbbreviatedName(self):
         return self._abbreviatedname
 
     @property
@@ -73,7 +85,16 @@ class PlayerAction(object):
 
     @property
     def isRedCard(self):
-        return self._actiontype == ACTION_RED_CARD   
+        return (self._actiontype == ACTION_RED_CARD or
+                self._actiontype == ACTION_YELLOW_RED_CARD)
+
+    @property
+    def isStraightRed(self):
+        return self._actiontype == ACTION_RED_CARD
+
+    @property
+    def isSecondBooking(self):
+        return self._actiontype == ACTION_YELLOW_RED_CARD
 
     @property
     def isPenalty(self):

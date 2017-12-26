@@ -116,3 +116,10 @@ class matchcommon(object):
         if teams:
             teams = json.loads(teams[0]["payload"])
             return [x for x in teams if "teams" not in x["url"]]
+
+
+def getAllTeams():
+    return matchcommon().getTeams()
+
+def getAllTournaments():
+    return matchcommon().getTournaments()
